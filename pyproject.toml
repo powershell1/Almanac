@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gdr4"
+version = "0.1.0"
+description = "Amortized neural posterior estimation of companion orbits from Gaia DR4 epoch astrometry"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# Versions pinned from the local test env (.env/gdr4, Python 3.11.17) on 2026-10-20.
+# TODO(Phase 1 step 1): re-pin to the versions printed by notebooks/kaggle/01_env_check
+# so local and Kaggle runs match.
+dependencies = [
+    "numpy==2.4.6",
+    "scipy==1.17.1",
+    "astropy==8.0.2",
+    "healpy==1.20.1",
+    "pyyaml==6.0.3",
+    "torch==2.14.1",
+    "zuko==1.6.0",
+    "scikit-learn==1.9.1",
+    "matplotlib==3.11.2",
+    "joblib==1.6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "NPY"]
+ignore = ["E741"]  # A, B, F, G and l/I are standard symbols in the astrometry formulas
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: takes more than a few seconds"]

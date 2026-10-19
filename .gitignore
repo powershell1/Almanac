@@ -1,0 +1,27 @@
+# Local conda install + env (see scripts/setup_local_env.sh)
+.env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Large / external data (persist on Kaggle as Datasets, never in git)
+external/
+data_cache/
+shards/
+checkpoints/
+*.npy
+*.npz
+*.pt
+
+# Local smoke-test outputs (pipeline checks only, not research results)
+results/smoke*/
+runs_local/
+
+.ipynb_checkpoints/
+.DS_Store
