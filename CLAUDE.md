@@ -19,10 +19,13 @@ Amortized neural posterior estimation (NPE) of companion orbits from **Gaia DR4 
 
 ## Current status (as of 2026-10-20)
 
-- Planning complete. **No code, no data, no results exist yet.**
-- The direction was chosen after comparing 12 candidate projects.
+- Planning complete. The direction was chosen after comparing 12 candidate projects.
 - Novelty search on 2026-10-20 found no published amortized orbit-posterior work for Gaia epoch astrometry. Re-check monthly (see "Novelty watch").
-- Nothing belongs in `results/` unless a script in this repo generated it.
+- **Phase 1 code drafted by Claude (2026-10-20) and tested locally on a toy scanning law.** It has not yet been reviewed or re-derived by the student (see `logs/ai_use_log.md`, `docs/derivations.md`).
+- Kaggle steps: `docs/kaggle_runbook.md`. Not run yet. gaiamock scan files not downloaded yet.
+- **No counted runs and no research results exist yet.** Nothing belongs in `results/` unless a script in this repo generated it.
+- Local env: `source .env/miniforge3/bin/activate .env/gdr4` (Miniforge, Python 3.11).
+- Drafted design choices awaiting approval: zuko spline flow + von Mises mixture for the phase; amplitude hyperparameter `s_a` (derivations §4); S/N and alias-failure definitions in `configs/killtest.yaml`.
 
 ---
 
