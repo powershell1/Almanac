@@ -1,0 +1,5 @@
+# Smoke-test seeds (NOT the frozen test set; see configs/test_seeds.yaml for that).
+test_entropy: 2222
+n_test: 300
+n_reference: 20
+n_kima: 5

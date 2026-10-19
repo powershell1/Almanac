@@ -1,0 +1,90 @@
+# Phase 1 kill test (CLAUDE.md, decision gate 2026-11-25).
+# Paths are relative to --root (on Kaggle: /kaggle/working). Inputs from Kaggle Datasets are
+# passed as absolute-path overrides, e.g. paths.scan_cache=/kaggle/input/<dataset>/<file>.
+run_name: killtest_v1
+paths:
+  scan_cache: data_cache/scan_cache_dr4_gaiamock.npz
+  shards_dir: shards/train
+  test_dir: shards/test
+  reference_dir: shards/reference
+  results_dir: results/killtest_v1
+  checkpoint_dir: checkpoints/killtest_v1
+
+scan:
+  source: gaiamock         # counted runs must use gaiamock (toy_nsl is for tests only)
+  gaiamock_commit: dd30fdbf787eb96878734605ac077ac69bf28c84
+
+# Single source of truth for priors (sim/priors.py reads this block).
+# OPEN: confirm every number below before the first counted run.
+prior:
+  period_d: [30, 2000]     # log-uniform
+  ecc_max: 0.9             # e ~ U(0, ecc_max)
+  amp_scale_mas: [0.01, 2.0]   # s_a ~ LogUniform; A, B, F, G ~ N(0, s_a^2)  (docs/derivations.md s.4)
+  gmag: [10, 13]
+  five_par_mean: {dra_mas: 0.0, ddec_mas: 0.0, parallax_mas: 7.5, pmra_masyr: 0.0, pmdec_masyr: 0.0}
+  five_par_std: {dra_mas: 10.0, ddec_mas: 10.0, parallax_mas: 2.5, pmra_masyr: 40.0, pmdec_masyr: 40.0}
+
+simulation:
+  train_entropy: 222260211442601938018838153791257173711
+  n_train: 2000000
+  shard_size: 50000        # 40 shards, ~125 MB each (ragged storage)
+  drop_frac: 0.1           # gaiamock drops a random 10% of transits
+  noise_model: nominal     # training noise = model A
+  batch_size: 5000
+
+test_set:
+  seeds_file: configs/test_seeds.yaml
+  # Same stars, different noise realisations: nominal is the gate; the rest are the
+  # misspecification suite (reported, not gated in Phase 1).
+  noise_models: [nominal, gaiamock_jitter, sigma_inflated_1.2, sigma_deflated_0.8,
+                 outliers_2pct, scan_harmonics]
+
+reference:
+  n_prior_samples: 2000000
+  refine: true             # defensive importance sampling around stage-1 modes
+  n_refine_samples: 2000000
+  refine_rounds: 3
+  chunk: 20000
+
+model:
+  features: raw            # raw | normalized  (input variants a / b; run both)
+  d_model: 256
+  n_layers: 6
+  n_heads: 8
+  n_freq: 32
+  ctx_dim: 256
+  flow_transforms: 6
+  flow_hidden: [256, 256]
+  flow_bins: 16
+  n_vm: 8
+
+training:
+  batch_size: 512
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  max_steps: 300000
+  warmup_steps: 2000
+  val_shards: 1            # last training shard(s) held out for validation (never the test set)
+  val_every: 2000
+  checkpoint_minutes: 30
+  max_hours: 11.0          # stop cleanly before Kaggle's 12 h session limit; resume next session
+  amp: true                # fp16 autocast for the encoder only; the flow runs in fp32
+  num_workers: 3
+  seed: 20261020
+
+evaluation:
+  n_posterior_samples: 2000
+  levels: [0.5, 0.68, 0.9]
+  # Pre-registered kill-test definitions (CLAUDE.md). OPEN: confirm before the first counted run.
+  snr_key: snr_a0          # S/N = a0 / sigma_transit (Casertano-style). Alternative: snr_mf
+  snr_min: 6.0
+  period_tol: 0.1          # "recovered" = posterior median P within 10% of the truth
+  alias_mass_threshold: 0.5  # "alias failure" = < 50% posterior mass within 10% of the truth
+  thresholds:
+    max_coverage_error: 0.05
+    min_period_recovery: 0.90
+    max_ms_per_star: 50.0
+    c2st_max: 0.65
+    c2st_min_fraction: 0.70
+    abandon_coverage_error: 0.10
+    abandon_alias_failure: 0.20

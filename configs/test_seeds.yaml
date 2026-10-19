@@ -1,0 +1,7 @@
+# FROZEN TEST SET. Do not edit, and never use these stars for training, tuning or model
+# selection (CLAUDE.md). Generated once with secrets.randbits(128) on 2026-10-20.
+# The training entropy in configs/killtest.yaml is a different, independent number.
+test_entropy: 337984465447882788450223639591053828202
+n_test: 2000
+n_reference: 200    # brute-force reference posteriors for the first 200 test stars
+n_kima: 20          # kima cross-check for the first 20 of those

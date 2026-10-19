@@ -1,0 +1,71 @@
+# Local pipeline smoke test. Toy scanning law, tiny sizes. NOT a counted run; outputs are
+# pipeline checks only and go to results/smoke*/ (gitignored).
+run_name: smoke
+paths:
+  scan_cache: data_cache/scan_cache_toy_nside8.npz
+  shards_dir: shards/smoke/train
+  test_dir: shards/smoke/test
+  reference_dir: shards/smoke/reference
+  results_dir: results/smoke
+  checkpoint_dir: checkpoints/smoke
+
+scan:
+  source: toy_nsl          # gaiamock | toy_nsl
+  nside: 8
+
+prior:
+  period_d: [30, 2000]
+  ecc_max: 0.9
+  amp_scale_mas: [0.01, 2.0]
+  gmag: [10, 13]
+  five_par_mean: {dra_mas: 0.0, ddec_mas: 0.0, parallax_mas: 7.5, pmra_masyr: 0.0, pmdec_masyr: 0.0}
+  five_par_std: {dra_mas: 10.0, ddec_mas: 10.0, parallax_mas: 2.5, pmra_masyr: 40.0, pmdec_masyr: 40.0}
+
+simulation:
+  train_entropy: 1111            # smoke only
+  n_train: 20000
+  shard_size: 5000
+  drop_frac: 0.1
+  noise_model: nominal
+  batch_size: 1000
+
+test_set:
+  seeds_file: configs/smoke_test_seeds.yaml
+  noise_models: [nominal, sigma_inflated_1.2]
+
+reference:
+  n_prior_samples: 100000
+  refine: true
+  n_refine_samples: 100000
+  refine_rounds: 2
+  chunk: 10000
+
+model:
+  features: raw              # raw | normalized  (CLAUDE.md input variants a / b)
+  d_model: 64
+  n_layers: 2
+  n_heads: 4
+  n_freq: 16
+  ctx_dim: 64
+  flow_transforms: 3
+  flow_hidden: [64, 64]
+  flow_bins: 8
+  n_vm: 4
+
+training:
+  batch_size: 128
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  max_steps: 200
+  warmup_steps: 20
+  val_shards: 1
+  val_every: 100
+  checkpoint_minutes: 30
+  max_hours: 0.2
+  amp: false
+  num_workers: 0
+  seed: 7
+
+evaluation:
+  n_posterior_samples: 500
+  levels: [0.5, 0.68, 0.9]
