@@ -116,9 +116,13 @@ and then `A, B, F, G ~ N(0, s_a²)` independently.
 - To get θ_lin for one posterior sample of θ_nl, sample `s_a` from the 1-D conditional
   `p(s_a | θ_nl, w) ∝ p(w | θ_nl, s_a) p(s_a)` on a grid, then θ_lin from section 3.
 
-**Physical prior implied:** i.i.d. Gaussian Thiele-Innes constants imply some distribution over
-(a₀, cos i, ω, Ω). `scripts/figures/ti_prior_check.py` draws from it so you can see it. Decide
-whether it needs reweighting before physical parameters are reported (CLAUDE.md).
+**Physical prior implied:** `scripts/figures/ti_prior_check.py` draws i.i.d. Gaussian (A, B, F, G)
+and converts to Campbell elements (`results/prior_checks/ti_prior.png`). Result: ω and Ω come
+out uniform, but **cos i does not**: it peaks at cos i = 0 (edge-on). So the implied orientation
+prior is not isotropic. This does not affect the (P, e, M₀) posterior in the kill test, but
+inclinations and companion masses must be importance-reweighted to an isotropic prior before
+they are reported (CLAUDE.md). Exercise: derive the Jacobian of (A, B, F, G) → (a₀, i, ω, Ω)
+and explain the shape you see.
 
 ---
 
