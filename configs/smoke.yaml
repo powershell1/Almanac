@@ -69,3 +69,17 @@ training:
 evaluation:
   n_posterior_samples: 500
   levels: [0.5, 0.68, 0.9]
+  snr_key: snr_a0
+  snr_min: 6.0
+  period_tol: 0.1
+  alias_mass_threshold: 0.5
+  c2st_min_ess: 500
+  c2st_n_samples: 300
+  thresholds:
+    max_coverage_error: 0.05
+    min_period_recovery: 0.90
+    max_ms_per_star: 50.0
+    c2st_max: 0.65
+    c2st_min_fraction: 0.70
+    abandon_coverage_error: 0.10
+    abandon_alias_failure: 0.20

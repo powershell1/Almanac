@@ -80,6 +80,9 @@ evaluation:
   snr_min: 6.0
   period_tol: 0.1          # "recovered" = posterior median P within 10% of the truth
   alias_mass_threshold: 0.5  # "alias failure" = < 50% posterior mass within 10% of the truth
+  c2st_min_ess: 2000       # C2ST only where the reference is trustworthy; report how many
+  c2st_n_samples: 2000
+  # Coverage gate uses the joint HPD expected coverage; TARP and marginal coverage are reported.
   thresholds:
     max_coverage_error: 0.05
     min_period_recovery: 0.90
