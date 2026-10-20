@@ -34,3 +34,10 @@ The **project start date** is the first *counted* simulation or training run (se
   → 2.89 **with** an analytic circular-orbit periodogram input (`nn/periodogram.py`). Added it
   to the encoder (`model.pgram_k`). This is an architecture decision for me to approve; turning
   it off is an ablation.
+- Local sanity run with the periodogram (toy scanning law, 300k sims, small model, 3,555 CPU
+  steps / 1.5 h; **pipeline check, not counted, not a research result**): val loss
+  4.68 → 1.96. `scripts/evaluate.py` on the 300-star smoke test set: HPD coverage error
+  2.0 pp (nominal), 6.7 pp when sigma is 20% too small; period recovery 0.91 at S/N > 6;
+  alias failures 0.10; 21 ms/star on CPU; C2ST ≤ 0.65 on 9/20 reference stars. The C2ST
+  failures are all at S/N ≥ ~2: the small model's posteriors are wider than the sharp
+  references there. Expect the full model and 12 GPU-hours to be needed for this criterion.
