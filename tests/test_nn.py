@@ -97,3 +97,15 @@ def test_npe_learns_toy_period(batch_and_prior):
         opt.step()
         first = loss.item() if first is None else first
     assert loss.item() < first - 1.0
+
+
+def test_npe_with_periodogram_branch(batch_and_prior):
+    batch, _ = batch_and_prior
+    torch.manual_seed(0)
+    model = NPE(**{**SMALL, "pgram_k": 64})
+    loss = model(batch, batch["v"])
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert model.encoder.pgram.out.weight.grad is not None
+    v = model.sample(batch, 3)
+    assert v.shape == (3, 16, 3)

@@ -29,3 +29,8 @@ The **project start date** is the first *counted* simulation or training run (se
   outside a bounded window, where the Gaussian base cannot fit those tails.
 - Fix: u = probit(...) (inverse normal CDF), so the prior is exactly N(0, 1) = the flow's
   base. Re-test: the no-information head reaches 4.68 vs the 4.676 target. All tests pass.
+- After the probit fix the run sat at the prior level (val 4.70 vs 4.676 after 600 steps).
+  Diagnostic on S/N > 20 stars (same model, seed, 400 steps): loss 4.68 → 4.50 without and
+  → 2.89 **with** an analytic circular-orbit periodogram input (`nn/periodogram.py`). Added it
+  to the encoder (`model.pgram_k`). This is an architecture decision for me to approve; turning
+  it off is an ablation.

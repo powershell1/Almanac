@@ -57,6 +57,8 @@ model:
   flow_hidden: [256, 256]
   flow_bins: 16
   n_vm: 8
+  pgram_k: 512             # analytic circular-orbit periodogram input (0 = off; ablation)
+  pgram_period_d: [20, 3000]
 
 training:
   batch_size: 512

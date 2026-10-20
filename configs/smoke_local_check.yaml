@@ -51,6 +51,8 @@ model:
   flow_hidden: [128, 128]
   flow_bins: 8
   n_vm: 6
+  pgram_k: 512
+  pgram_period_d: [20, 3000]
 
 training:
   batch_size: 256

@@ -14,6 +14,8 @@ import torch
 import zuko
 from torch import nn
 
+from gdr4.nn.periodogram import circular_periodogram, frequency_grid
+
 FEATURE_VARIANTS = ("raw", "normalized")
 _R0_MAS = 0.1  # fixed scale for raw residuals and sigmas (typical per-transit sigma ~0.05 mas)
 
@@ -68,12 +70,45 @@ class FourierTime(nn.Module):
             return torch.cat([torch.sin(phase), torch.cos(phase)], dim=-1)
 
 
+class PeriodogramEncoder(nn.Module):
+    """1-D CNN over log(1 + Delta chi^2) on a fixed frequency grid (see nn/periodogram.py)."""
+
+    def __init__(self, k: int, period_range_d: tuple[float, float], out_dim: int, ch: int = 32):
+        super().__init__()
+        self.register_buffer("freqs", frequency_grid(*period_range_d, k), persistent=False)
+        self.cnn = nn.Sequential(
+            nn.Conv1d(1, ch, 7, padding=3),
+            nn.GELU(),
+            nn.Conv1d(ch, ch, 7, stride=2, padding=3),
+            nn.GELU(),
+            nn.Conv1d(ch, ch, 7, stride=2, padding=3),
+            nn.GELU(),
+            nn.Conv1d(ch, ch, 7, stride=2, padding=3),
+            nn.GELU(),
+        )
+        self.out = nn.Linear(ch * (k // 8), out_dim)
+
+    def forward(self, batch: dict) -> torch.Tensor:
+        with torch.autocast(device_type=batch["t_d"].device.type, enabled=False):
+            pg = torch.log1p(circular_periodogram(batch, self.freqs)).float()
+            return self.out(self.cnn(pg[:, None]).flatten(1))
+
+
 class TransitEncoder(nn.Module):
     def __init__(
-        self, variant: str, d_model: int, n_layers: int, n_heads: int, n_freq: int, ctx_dim: int
+        self,
+        variant: str,
+        d_model: int,
+        n_layers: int,
+        n_heads: int,
+        n_freq: int,
+        ctx_dim: int,
+        pgram_k: int = 0,
+        pgram_period_d: tuple[float, float] = (20.0, 3000.0),
     ):
         super().__init__()
         self.variant = variant
+        self.pgram = PeriodogramEncoder(pgram_k, pgram_period_d, d_model) if pgram_k else None
         self.time = FourierTime(n_freq)
         n_in = n_token_features(variant) + 2 * n_freq
         self.embed = nn.Sequential(nn.Linear(n_in, d_model), nn.GELU(), nn.Linear(d_model, d_model))
@@ -91,7 +126,7 @@ class TransitEncoder(nn.Module):
         self.query = nn.Parameter(torch.randn(1, 1, d_model) / math.sqrt(d_model))
         self.pool = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
         self.head = nn.Sequential(
-            nn.Linear(2 * d_model + n_global_features(variant), ctx_dim),
+            nn.Linear((3 if pgram_k else 2) * d_model + n_global_features(variant), ctx_dim),
             nn.GELU(),
             nn.Linear(ctx_dim, ctx_dim),
         )
@@ -106,7 +141,10 @@ class TransitEncoder(nn.Module):
         mf = mask[..., None].to(h.dtype)
         mean = (h * mf).sum(1) / mf.sum(1).clamp_min(1)
         g = global_features(batch, self.variant).to(h.dtype)
-        return self.head(torch.cat([attn[:, 0], mean, g], dim=-1))
+        parts = [attn[:, 0], mean, g]
+        if self.pgram is not None:
+            parts.append(self.pgram(batch).to(h.dtype))
+        return self.head(torch.cat(parts, dim=-1))
 
 
 class VonMisesMixture(nn.Module):
@@ -169,6 +207,8 @@ class NPE(nn.Module):
         flow_hidden: tuple[int, ...] = (256, 256),
         flow_bins: int = 16,
         n_vm: int = 8,
+        pgram_k: int = 0,
+        pgram_period_d: tuple[float, float] = (20.0, 3000.0),
     ):
         super().__init__()
         self.hparams = dict(
@@ -182,8 +222,12 @@ class NPE(nn.Module):
             flow_hidden=list(flow_hidden),
             flow_bins=flow_bins,
             n_vm=n_vm,
+            pgram_k=pgram_k,
+            pgram_period_d=list(pgram_period_d),
         )
-        self.encoder = TransitEncoder(features, d_model, n_layers, n_heads, n_freq, ctx_dim)
+        self.encoder = TransitEncoder(
+            features, d_model, n_layers, n_heads, n_freq, ctx_dim, pgram_k, tuple(pgram_period_d)
+        )
         self.flow = zuko.flows.NSF(
             features=2,
             context=ctx_dim,
@@ -195,7 +239,8 @@ class NPE(nn.Module):
 
     @classmethod
     def from_config(cls, cfg_model: dict) -> NPE:
-        return cls(**{k: (tuple(v) if k == "flow_hidden" else v) for k, v in cfg_model.items()})
+        tuples = ("flow_hidden", "pgram_period_d")
+        return cls(**{k: (tuple(v) if k in tuples else v) for k, v in cfg_model.items()})
 
     def context(self, batch: dict, amp: bool = False) -> torch.Tensor:
         dev = batch["t_d"].device.type

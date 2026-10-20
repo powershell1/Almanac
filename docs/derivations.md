@@ -151,6 +151,19 @@ in the unconstrained space, where it does not matter.
 
 ---
 
+## 5b. Periodogram input feature (`nn/periodogram.py`, `tests/test_periodogram.py`)
+
+For a circular orbit, the four orbital columns at trial frequency f are
+`cos(2πft) cos ψ, cos(2πft) sin ψ, sin(2πft) cos ψ, sin(2πft) sin ψ`; any phase and orientation
+is a linear combination of them, so the 9-parameter model is linear and its best fit is exact.
+The feature is `Δχ²(f) = χ²₅ − χ²₉(f)` on 512 frequencies, computed as `bᵀG⁻¹b` with
+`b = OᵀWr`, `G = OᵀWO − OᵀWM₅(M₅ᵀWM₅)⁻¹M₅ᵀWO` (the part of the orbital columns not already
+explained by the 5-parameter model). Exercise: derive this from section 3 with a flat prior.
+
+Why: without it, the transformer had to discover periodicity from irregular samples and barely
+learned (400 steps on S/N > 20 stars: loss 4.68 → 4.50; with it: → 2.89; research log 2026-10-20).
+`model.pgram_k: 0` turns it off, which is a natural ablation for Phase 4.
+
 ## 6. Calibration metrics (`eval/calibration.py`)
 
 - **HPD coverage (expected coverage).** For each test star, the credibility level of the true
