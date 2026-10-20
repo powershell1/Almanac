@@ -55,17 +55,17 @@ model:
   pgram_period_d: [20, 3000]
 
 training:
-  batch_size: 256
+  batch_size: 128
   lr: 1.0e-3
   weight_decay: 1.0e-4
   max_steps: 30000
   warmup_steps: 500
   val_shards: 1
-  val_every: 1000
+  val_every: 250
   checkpoint_minutes: 30
   max_hours: 1.5
   amp: false
-  num_workers: 4
+  num_workers: 3
   seed: 7
 
 evaluation:
