@@ -45,10 +45,17 @@ def test_prior_density_integrates_to_one(prior):
     v[:, 0] = u
     v[:, 3] = np.log(0.1)
     lp = prior.log_prob_unconstrained(v)
-    # Marginal over u_P of the logistic density is 1; remaining factors are the M0 and s_a ones.
+    # Marginal over u_P of the normal density is 1; remaining factors are the M0 and s_a ones.
     rest = -np.log(2 * np.pi) - np.log(np.log(prior.amp_scale_max_mas / prior.amp_scale_min_mas))
-    rest += -2 * np.log(2.0)  # logistic density of u_e at 0 is 1/4
+    rest += -0.5 * np.log(2 * np.pi)  # standard-normal density of u_e at 0
     np.testing.assert_allclose(np.trapezoid(np.exp(lp - rest), u), 1.0, rtol=1e-6)
+
+
+def test_prior_unconstrained_is_standard_normal(prior, rng):
+    nl = prior.sample_nonlinear(rng, 200000)
+    v = prior.to_unconstrained(nl["period_d"], nl["ecc"], nl["mean_anom0_rad"])
+    np.testing.assert_allclose(v[:, :2].mean(0), 0, atol=0.01)
+    np.testing.assert_allclose(v[:, :2].std(0), 1, atol=0.01)
 
 
 def test_linear_prior_used_by_simulator(prior, rng):

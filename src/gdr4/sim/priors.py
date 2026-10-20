@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.special import ndtr, ndtri
 
 from gdr4.model.astrometry import LIN_NAMES, N_5P, N_LIN
 from gdr4.model.kepler import TWO_PI
@@ -18,17 +19,16 @@ from gdr4.model.kepler import TWO_PI
 FIVE_PAR_NAMES = LIN_NAMES[:N_5P]
 
 
-def _logit(p):
-    return np.log(p) - np.log1p(-p)
+# Probit map: a quantity uniform on (0, 1) becomes standard normal. We use it (rather than a
+# logit) so that the prior on (u_P, u_e) is exactly N(0, 1), the flow's base distribution.
+# With a logit the prior has exponential tails, which zuko's spline (identity outside its
+# bounded window) cannot represent; that made training unstable (found 2026-10-20).
+_probit = ndtri
+_inv_probit = ndtr
 
 
-def _sigmoid(x):
-    return 0.5 * (1.0 + np.tanh(0.5 * x))
-
-
-def _log_logistic_density(u):
-    """log of d sigmoid(u) / du = log sigmoid(u) + log sigmoid(-u)."""
-    return -np.logaddexp(0.0, -u) - np.logaddexp(0.0, u)
+def _log_std_normal(u):
+    return -0.5 * u * u - 0.5 * np.log(2 * np.pi)
 
 
 @dataclass(frozen=True)
@@ -102,13 +102,14 @@ class Prior:
     def to_unconstrained(self, period_d, ecc, mean_anom0_rad, amp_scale_mas=None):
         """Map to v = (u_P, u_e, M0[, u_s]) with u_P, u_e (and u_s) in R and M0 in [0, 2 pi).
 
-        ``u_P = logit(fraction of the log-period range)`` and ``u_e = logit(e / e_max)``.
-        Under the prior, u_P and u_e are standard-logistic distributed.
+        ``u_P = probit(fraction of the log-period range)`` and ``u_e = probit(e / e_max)``,
+        where probit is the inverse standard-normal CDF. Under the prior, u_P and u_e are
+        independent N(0, 1).
         """
         frac_p = (np.log(period_d) - np.log(self.period_min_d)) / self._log_p_range
         cols = [
-            _logit(frac_p),
-            _logit(np.asarray(ecc) / self.ecc_max),
+            _probit(frac_p),
+            _probit(np.asarray(ecc) / self.ecc_max),
             np.mod(mean_anom0_rad, TWO_PI),
         ]
         if amp_scale_mas is not None:
@@ -117,8 +118,10 @@ class Prior:
 
     def from_unconstrained(self, v: np.ndarray) -> dict[str, np.ndarray]:
         out = {
-            "period_d": np.exp(np.log(self.period_min_d) + _sigmoid(v[..., 0]) * self._log_p_range),
-            "ecc": self.ecc_max * _sigmoid(v[..., 1]),
+            "period_d": np.exp(
+                np.log(self.period_min_d) + _inv_probit(v[..., 0]) * self._log_p_range
+            ),
+            "ecc": self.ecc_max * _inv_probit(v[..., 1]),
             "mean_anom0_rad": np.mod(v[..., 2], TWO_PI),
         }
         if v.shape[-1] > 3:
@@ -127,7 +130,7 @@ class Prior:
 
     def log_prob_unconstrained(self, v: np.ndarray) -> np.ndarray:
         """Prior log density of v = (u_P, u_e, M0, log s_a); -inf outside the support."""
-        lp = _log_logistic_density(v[..., 0]) + _log_logistic_density(v[..., 1]) - np.log(TWO_PI)
+        lp = _log_std_normal(v[..., 0]) + _log_std_normal(v[..., 1]) - np.log(TWO_PI)
         if v.shape[-1] > 3:
             lo, hi = np.log(self.amp_scale_min_mas), np.log(self.amp_scale_max_mas)
             inside = (v[..., 3] >= lo) & (v[..., 3] <= hi)

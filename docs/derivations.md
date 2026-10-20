@@ -130,8 +130,13 @@ and explain the shape you see.
 
 Unconstrained coordinates:
 
-- `u_P = logit((log P − log P_min) / (log P_max − log P_min))`
-- `u_e = logit(e / e_max)`
+- `u_P = Φ⁻¹((log P − log P_min) / (log P_max − log P_min))`
+- `u_e = Φ⁻¹(e / e_max)`
+
+where Φ⁻¹ is the inverse standard-normal CDF (probit). Because log P and e are uniform under the
+prior, u_P and u_e are exactly N(0, 1) under the prior: the same as the flow's base
+distribution, so an untrained flow starts at the prior. (A first draft used a logit; its
+exponential tails made the spline flow's loss spike, see the research log for 2026-10-20.)
 - `M₀ ∈ [0, 2π)` is circular, so it is **not** given to a flow on ℝ.
 
 The joint density factorises exactly as
