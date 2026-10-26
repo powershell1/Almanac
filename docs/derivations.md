@@ -164,6 +164,18 @@ Why: without it, the transformer had to discover periodicity from irregular samp
 learned (400 steps on S/N > 20 stars: loss 4.68 → 4.50; with it: → 2.89; research log 2026-10-20).
 `model.pgram_k: 0` turns it off, which is a natural ablation for Phase 4.
 
+**Peak features** (`peak_features`, `model.pgram_peaks`). The 8 highest local maxima of Δχ²(f)
+are also given to the network directly. Each is refined below the grid spacing: evaluate Δχ²
+at 9 points spanning ±1 grid step around the peak, take the highest point `y₀` and its
+neighbours `y₋, y₊` (spacing `h`), and fit a parabola. Its vertex is at
+`f* = f₀ + δh` with `δ = ½(y₋ − y₊)/(y₋ − 2y₀ + y₊)`, height `y₀ − ¼(y₋ − y₊)δ`.
+(Exercise: derive δ by fitting `y = a(f − f*)² + c` through the three points.)
+Per peak the network gets: log-period scaled to [0, 1] over the grid's period range,
+log(1 + Δχ²), that minus the highest peak's value, and a validity flag.
+Why: on the local check the periodogram peaked at the true period for 10 of the 14 high-S/N
+failures, but the network did not read the position out precisely (research log 2026-10-27).
+Giving it several peaks also lets it compare aliases and harmonics (P, P/2, ...).
+
 ## 6. Calibration metrics (`eval/calibration.py`)
 
 - **HPD coverage (expected coverage).** For each test star, the credibility level of the true

@@ -48,3 +48,19 @@ on toy Gaussians; loader reads the Gaia BH3 epoch file.
 - [ ] Re-run `pytest` myself and read what each test checks.
 - [ ] Decide the open choices listed in `logs/research_log.md` (2026-10-20).
 - [ ] Record here what I changed.
+
+---
+
+## 2026-10-26 / 27: Claude Code (Opus 5.5), session 2
+
+**Prompts:** "Can you investigate why Agreement with exact posteriors (C2ST) not passed the
+target or Wrong-period rate ... Could it be code problem or about the equation?", "push it to
+github", "add the periodogram peak features to the encoder".
+
+**What Claude produced:** diagnostics in `scripts/diagnostics/` (findings in the research log,
+2026-10-27); peak features in `src/gdr4/nn/periodogram.py` (`top_peaks`, `refine_peaks`,
+`peak_features`) and `nn/model.py`; tests; derivation in `docs/derivations.md` §5b.
+
+**Status:** drafted and tested by Claude; not yet reviewed or re-derived by me.
+- [ ] Re-derive the parabolic peak refinement (`docs/derivations.md` §5b).
+- [ ] Decide whether to keep the peak features (A/B evidence is weak: one seed, 144 stars).

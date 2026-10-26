@@ -14,7 +14,12 @@ import torch
 import zuko
 from torch import nn
 
-from gdr4.nn.periodogram import circular_periodogram, frequency_grid
+from gdr4.nn.periodogram import (
+    N_PEAK_FEATURES,
+    circular_periodogram,
+    frequency_grid,
+    peak_features,
+)
 
 FEATURE_VARIANTS = ("raw", "normalized")
 _R0_MAS = 0.1  # fixed scale for raw residuals and sigmas (typical per-transit sigma ~0.05 mas)
@@ -71,10 +76,24 @@ class FourierTime(nn.Module):
 
 
 class PeriodogramEncoder(nn.Module):
-    """1-D CNN over log(1 + Delta chi^2) on a fixed frequency grid (see nn/periodogram.py)."""
+    """1-D CNN over log(1 + Delta chi^2) on a fixed frequency grid (see nn/periodogram.py).
 
-    def __init__(self, k: int, period_range_d: tuple[float, float], out_dim: int, ch: int = 32):
+    With ``n_peaks > 0`` it also embeds the sub-grid positions and heights of the highest
+    peaks, so the network does not have to locate them from the coarse curve itself.
+    """
+
+    def __init__(
+        self,
+        k: int,
+        period_range_d: tuple[float, float],
+        out_dim: int,
+        ch: int = 32,
+        n_peaks: int = 0,
+    ):
         super().__init__()
+        self.period_range_d = tuple(period_range_d)
+        self.n_peaks = n_peaks
+        self.out_dim = out_dim * (2 if n_peaks else 1)
         self.register_buffer("freqs", frequency_grid(*period_range_d, k), persistent=False)
         self.cnn = nn.Sequential(
             nn.Conv1d(1, ch, 7, padding=3),
@@ -87,11 +106,21 @@ class PeriodogramEncoder(nn.Module):
             nn.GELU(),
         )
         self.out = nn.Linear(ch * (k // 8), out_dim)
+        if n_peaks:
+            self.peaks = nn.Sequential(
+                nn.Linear(n_peaks * N_PEAK_FEATURES, out_dim),
+                nn.GELU(),
+                nn.Linear(out_dim, out_dim),
+            )
 
     def forward(self, batch: dict) -> torch.Tensor:
         with torch.autocast(device_type=batch["t_d"].device.type, enabled=False):
-            pg = torch.log1p(circular_periodogram(batch, self.freqs)).float()
-            return self.out(self.cnn(pg[:, None]).flatten(1))
+            pg = circular_periodogram(batch, self.freqs)
+            emb = self.out(self.cnn(torch.log1p(pg).float()[:, None]).flatten(1))
+            if not self.n_peaks:
+                return emb
+            pk = peak_features(batch, self.freqs, pg, self.n_peaks, self.period_range_d)
+            return torch.cat([emb, self.peaks(pk.flatten(1))], dim=-1)
 
 
 class TransitEncoder(nn.Module):
@@ -105,10 +134,16 @@ class TransitEncoder(nn.Module):
         ctx_dim: int,
         pgram_k: int = 0,
         pgram_period_d: tuple[float, float] = (20.0, 3000.0),
+        pgram_peaks: int = 0,
     ):
         super().__init__()
         self.variant = variant
-        self.pgram = PeriodogramEncoder(pgram_k, pgram_period_d, d_model) if pgram_k else None
+        self.pgram = (
+            PeriodogramEncoder(pgram_k, pgram_period_d, d_model, n_peaks=pgram_peaks)
+            if pgram_k
+            else None
+        )
+        n_pgram = self.pgram.out_dim if self.pgram is not None else 0
         self.time = FourierTime(n_freq)
         n_in = n_token_features(variant) + 2 * n_freq
         self.embed = nn.Sequential(nn.Linear(n_in, d_model), nn.GELU(), nn.Linear(d_model, d_model))
@@ -126,7 +161,7 @@ class TransitEncoder(nn.Module):
         self.query = nn.Parameter(torch.randn(1, 1, d_model) / math.sqrt(d_model))
         self.pool = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
         self.head = nn.Sequential(
-            nn.Linear((3 if pgram_k else 2) * d_model + n_global_features(variant), ctx_dim),
+            nn.Linear(2 * d_model + n_pgram + n_global_features(variant), ctx_dim),
             nn.GELU(),
             nn.Linear(ctx_dim, ctx_dim),
         )
@@ -209,8 +244,11 @@ class NPE(nn.Module):
         n_vm: int = 8,
         pgram_k: int = 0,
         pgram_period_d: tuple[float, float] = (20.0, 3000.0),
+        pgram_peaks: int = 0,
     ):
         super().__init__()
+        if pgram_peaks and not pgram_k:
+            raise ValueError("pgram_peaks needs the periodogram (pgram_k > 0)")
         self.hparams = dict(
             features=features,
             d_model=d_model,
@@ -224,9 +262,18 @@ class NPE(nn.Module):
             n_vm=n_vm,
             pgram_k=pgram_k,
             pgram_period_d=list(pgram_period_d),
+            pgram_peaks=pgram_peaks,
         )
         self.encoder = TransitEncoder(
-            features, d_model, n_layers, n_heads, n_freq, ctx_dim, pgram_k, tuple(pgram_period_d)
+            features,
+            d_model,
+            n_layers,
+            n_heads,
+            n_freq,
+            ctx_dim,
+            pgram_k,
+            tuple(pgram_period_d),
+            pgram_peaks,
         )
         self.flow = zuko.flows.NSF(
             features=2,

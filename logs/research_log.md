@@ -67,3 +67,17 @@ Scripts: `scripts/diagnostics/`.
   training-length issue; very sharp posteriors (S/N ≳ 30) are hard for this head.
 - No error found in the equations, the simulator, the reference sampler or the metrics.
   Decision needed before the counted run: see the options in the session notes.
+
+## 2026-10-27 (later): periodogram peak features added to the encoder
+
+- `model.pgram_peaks: 8`: the 8 highest Δχ² peaks, each refined below the grid spacing
+  (fine re-evaluation + parabola; within 0.05 grid steps of a 32× denser grid in the tests),
+  given to the network as (log-period, height, height relative to the top peak, valid flag).
+- A/B on the local data (small model, same seed and batch sequence, 800 steps on S/N > 6
+  training stars, scored on the 144 S/N > 6 smoke test stars; toy scan law; not counted):
+  - First attempt reused 60 cached batches; peaks looked *worse* (test loss 3.07 vs 2.83).
+    Train losses were equal, so this was over-fitting to the repeated batches. Discarded.
+  - With a fresh batch every step: test loss 2.978 → 2.877; period recovered 46.5% → 50.7%;
+    wrong-period rate 63.9% → 56.2%; ~5% slower. Single seed and 144 stars (binomial sd
+    ≈ 4 pp), so this is suggestive, not conclusive. Both variants are far from converged.
+- Kept on in `configs/killtest.yaml`; `pgram_peaks: 0` is the ablation. Needs my approval.

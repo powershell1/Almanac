@@ -109,3 +109,27 @@ def test_npe_with_periodogram_branch(batch_and_prior):
     assert model.encoder.pgram.out.weight.grad is not None
     v = model.sample(batch, 3)
     assert v.shape == (3, 16, 3)
+
+
+def test_npe_with_periodogram_peaks(batch_and_prior):
+    batch, _ = batch_and_prior
+    torch.manual_seed(0)
+    model = NPE(**{**SMALL, "pgram_k": 64, "pgram_peaks": 4})
+    loss = model(batch, batch["v"])
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert model.encoder.pgram.peaks[0].weight.grad is not None
+    # padding must not change anything, including the peak features
+    model.eval()
+    padded = dict(batch)
+    for k in ("t_d", "psi_rad", "plx_factor", "sigma_mas", "resid5_mas"):
+        padded[k] = torch.cat([batch[k], torch.full((16, 7), 3.0)], dim=1)
+    padded["mask"] = torch.cat([batch["mask"], torch.zeros(16, 7, dtype=bool)], dim=1)
+    assert torch.allclose(
+        model.log_prob(batch, batch["v"]), model.log_prob(padded, batch["v"]), atol=1e-4
+    )
+
+
+def test_peaks_require_periodogram():
+    with pytest.raises(ValueError):
+        NPE(**{**SMALL, "pgram_peaks": 4})

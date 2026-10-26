@@ -59,6 +59,7 @@ model:
   n_vm: 8
   pgram_k: 512             # analytic circular-orbit periodogram input (0 = off; ablation)
   pgram_period_d: [20, 3000]
+  pgram_peaks: 8              # top periodogram peaks as explicit inputs (0 = off; ablation)
 
 training:
   batch_size: 512

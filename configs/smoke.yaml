@@ -53,6 +53,7 @@ model:
   n_vm: 4
   pgram_k: 128
   pgram_period_d: [20, 3000]
+  pgram_peaks: 4
 
 training:
   batch_size: 128
