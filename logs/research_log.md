@@ -41,3 +41,29 @@ The **project start date** is the first *counted* simulation or training run (se
   alias failures 0.10; 21 ms/star on CPU; C2ST ≤ 0.65 on 9/20 reference stars. The C2ST
   failures are all at S/N ≥ ~2: the small model's posteriors are wider than the sharp
   references there. Expect the full model and 12 GPU-hours to be needed for this criterion.
+
+## 2026-10-27: why C2ST failed and why 14 high-S/N stars got the wrong period (local run)
+
+All on the local sanity-check run (toy scan law, small model, 3,555 CPU steps; not counted).
+Scripts: `scripts/diagnostics/`.
+
+- **The reference is correct.** Scored with the exact posterior (prior × analytic marginal
+  likelihood, no network), reference samples score the same as the truth (e.g. 42.8 vs 42.8)
+  and the truth lies within ±1.4 sd of the reference centre for all 10 highest-S/N stars.
+- **The NPE is centred right but too wide at high S/N.** Width ratio NPE/reference in u_P:
+  ≈1 for S/N < 1.5, 20–50 at S/N ≈ 5, 100–5000 at S/N 11–98. NPE samples score 10–17,500
+  log-units below the truth. C2ST is correctly detecting this; coverage still passes because a
+  wide but centred posterior can be calibrated on average (coverage by S/N bin is 0.44–0.62
+  at the 50% level).
+- **The 14 "alias failures" are not real aliases.** The exact posterior puts 94–100% of its
+  mass within 10% of the true period for all 14. The network is wrong, not the data.
+- The circular periodogram input peaks at the true period for 10/14 of them (also at
+  e ≈ 0.85–0.89), so the information is in the input; the network does not read it out
+  precisely. For the 4 long-period failures (P ≈ 1600–1880 d, close to the ~1977 d baseline),
+  the periodogram peak itself is 5–18% low, and the NPE copies that biased peak.
+- **Flow head test** (fit fixed 2-D Gaussians): widths 0.1 and 0.01 are fitted in 3,000 steps;
+  1e-3 needs ~9,000 steps (reaches 1.6e-3); 1e-4 is still at 3e-2 after 9,000 steps. A naive
+  context-dependent affine "zoom" layer made it worse. So: moderate sharpness is a
+  training-length issue; very sharp posteriors (S/N ≳ 30) are hard for this head.
+- No error found in the equations, the simulator, the reference sampler or the metrics.
+  Decision needed before the counted run: see the options in the session notes.

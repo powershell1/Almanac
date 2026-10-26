@@ -40,6 +40,7 @@ ignore = ["E741"]  # A, B, F, G and l/I are standard symbols in the astrometry f
 
 [tool.ruff.lint.per-file-ignores]
 "notebooks/**" = ["E501"]  # generated notebook cells hold long shell commands
+"scripts/diagnostics/**" = ["E501", "E401"]  # one-off diagnostics with wide tables
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
