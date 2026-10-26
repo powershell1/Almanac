@@ -211,3 +211,61 @@ def test_anchored_npe_trains_samples_and_ignores_padding(batch_and_prior):
 def test_anchored_requires_enough_peaks():
     with pytest.raises(ValueError):
         NPE(**{**ANCHORED, "pgram_peaks": 2})
+
+
+PROFILE = {**ANCHORED, "profile": True, "target_ecc_max": 0.9}
+
+
+def test_anchored_von_mises_normalised_with_narrow_components():
+    from gdr4.nn.model import AnchoredVonMises
+
+    torch.manual_seed(0)
+    vm = AnchoredVonMises(ctx_dim=4, hidden=16, k=2, cond_dim=3, n_anchor=2)
+    with torch.no_grad():
+        vm.extra.weight.normal_(0, 0.2)
+        vm.extra.bias.normal_(0, 0.5)
+    anc = {
+        "m0": torch.tensor([[0.02, 4.0]]),
+        "log_tau_m0": torch.log(torch.tensor([[0.01, 0.05]])),
+        "valid_m0": torch.tensor([[True, True]]),
+    }
+    # fine grid near each anchor plus a coarse grid over the circle
+    m0 = torch.sort(
+        torch.cat(
+            [
+                torch.linspace(0, 2 * math.pi, 20001),
+                torch.linspace(0.0, 0.6, 20001),
+                torch.linspace(3.4, 4.6, 20001),
+            ]
+        )
+    ).values
+    n = len(m0)
+    cond, ctx = torch.randn(1, 3).expand(n, 3), torch.randn(1, 4).expand(n, 4)
+    anc_n = {k: v.expand(n, 2) for k, v in anc.items()}
+    with torch.no_grad():
+        dens = torch.exp(vm.log_prob(m0, cond, ctx, anc_n))
+    assert abs(torch.trapezoid(dens, m0).item() - 1.0) < 2e-3
+    with torch.no_grad():
+        s = vm.sample(cond[:5000], ctx[:5000], {k: v[:5000] for k, v in anc_n.items()})
+    assert ((s >= 0) & (s < 2 * math.pi)).all()
+
+
+def test_profile_npe_trains_samples_and_ignores_padding(batch_and_prior):
+    batch, _ = batch_and_prior
+    torch.manual_seed(0)
+    model = NPE(**PROFILE)
+    loss = model(batch, batch["v"])
+    loss.backward()
+    assert torch.isfinite(loss)
+    for name in ("vm.extra.weight", "encoder.pgram.map_out.0.weight"):
+        assert dict(model.named_parameters())[name].grad is not None, name
+    model.eval()
+    v, lq = model.sample(batch, 5, with_log_prob=True)
+    assert v.shape == (5, 16, 3) and torch.isfinite(lq).all()
+    padded = dict(batch)
+    for k in ("t_d", "psi_rad", "plx_factor", "sigma_mas", "resid5_mas"):
+        padded[k] = torch.cat([batch[k], torch.full((16, 7), 3.0)], dim=1)
+    padded["mask"] = torch.cat([batch["mask"], torch.zeros(16, 7, dtype=bool)], dim=1)
+    assert torch.allclose(
+        model.log_prob(batch, batch["v"]), model.log_prob(padded, batch["v"]), atol=1e-3
+    )

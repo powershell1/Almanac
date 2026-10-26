@@ -16,7 +16,10 @@ from gdr4.utils import load_config
 
 cfg = load_config("configs/smoke_local_check.yaml")
 prior = Prior.from_config(cfg["prior"])
-model, _ = load_model("runs_local/checkpoints/local_check/best.pt")
+import sys
+
+CKPT = sys.argv[1] if len(sys.argv) > 1 else "runs_local/checkpoints/local_check/best.pt"
+model, _ = load_model(CKPT)
 sh = read_shard("runs_local/shards/smoke/test/nominal", 0)
 b = to_torch_batch(gather_padded(sh, np.arange(20)), prior)
 torch.manual_seed(0)

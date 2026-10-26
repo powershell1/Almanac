@@ -50,6 +50,10 @@ def check_model_matches_prior(cfg: dict) -> None:
         got = [float(x) for x in m.get("target_period_d", (30.0, 2000.0))]
         if got != want:
             raise SystemExit(f"model.target_period_d {got} must equal prior.period_d {want}")
+        if m.get("profile") and float(m.get("target_ecc_max", 0.9)) != float(
+            cfg["prior"]["ecc_max"]
+        ):
+            raise SystemExit("model.target_ecc_max must equal prior.ecc_max")
 
 
 def _save_atomic(obj, path: Path):

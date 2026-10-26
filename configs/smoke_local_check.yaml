@@ -57,6 +57,8 @@ model:
   head: anchored
   n_anchor: 3
   target_period_d: [30, 2000]   # must equal prior.period_d
+  profile: true
+  target_ecc_max: 0.9      # must equal prior.ecc_max
 
 training:
   batch_size: 128

@@ -11,9 +11,11 @@ from __future__ import annotations
 import math
 
 import torch
+import torch.nn.functional as F  # noqa: N812
 import zuko
 from torch import nn
 
+from gdr4.nn.orbit_profile import profile_anchors
 from gdr4.nn.periodogram import (
     N_PEAK_FEATURES,
     analyse_peaks,
@@ -91,11 +93,15 @@ class PeriodogramEncoder(nn.Module):
         out_dim: int,
         ch: int = 32,
         n_peaks: int = 0,
+        n_profile: int = 0,
+        ecc_max: float = 0.9,
+        profile_grid: tuple[int, int] = (8, 16),
     ):
         super().__init__()
         self.period_range_d = tuple(period_range_d)
         self.n_peaks = n_peaks
-        self.out_dim = out_dim * (2 if n_peaks else 1)
+        self.n_profile, self.ecc_max, self.profile_grid = n_profile, ecc_max, tuple(profile_grid)
+        self.out_dim = out_dim * (1 + bool(n_peaks) + bool(n_profile))
         self.register_buffer("freqs", frequency_grid(*period_range_d, k), persistent=False)
         self.cnn = nn.Sequential(
             nn.Conv1d(1, ch, 7, padding=3),
@@ -114,6 +120,25 @@ class PeriodogramEncoder(nn.Module):
                 nn.GELU(),
                 nn.Linear(out_dim, out_dim),
             )
+        if n_profile:
+            n_e, n_m = self.profile_grid
+            self.map_cnn = nn.Sequential(
+                nn.Conv2d(1, 16, 3), nn.GELU(), nn.Conv2d(16, 16, 1), nn.GELU()
+            )
+            self.map_out = nn.Sequential(
+                nn.Linear(n_profile * (16 * (n_e - 2) * n_m + 1), out_dim),
+                nn.GELU(),
+                nn.Linear(out_dim, out_dim),
+            )
+
+    def _embed_maps(self, maps: torch.Tensor) -> torch.Tensor:
+        """maps (B, K, n_e, n_m) of log(1 + Delta chi^2) -> (B, out_dim); circular in M0."""
+        b, k, n_e, n_m = maps.shape
+        top = maps.flatten(2).amax(-1, keepdim=True)  # (B, K, 1)
+        x = (maps - top[..., None]).reshape(b * k, 1, n_e, n_m)
+        x = F.pad(x, (1, 1, 0, 0), mode="circular")  # wrap M0; e is cropped by the 3x3 conv
+        x = self.map_cnn(x).reshape(b, k, -1)
+        return self.map_out(torch.cat([x, top], dim=-1).flatten(1))
 
     def forward(self, batch: dict) -> tuple[torch.Tensor, dict | None]:
         """Embedding (B, out_dim) and the refined peak analysis (None without peaks)."""
@@ -124,7 +149,13 @@ class PeriodogramEncoder(nn.Module):
                 return emb, None
             peaks = analyse_peaks(batch, self.freqs, pg, self.n_peaks)
             pk = features_from_peaks(peaks, self.period_range_d)
-            return torch.cat([emb, self.peaks(pk.flatten(1))], dim=-1), peaks
+            parts = [emb, self.peaks(pk.flatten(1))]
+            if self.n_profile:
+                period = 1.0 / peaks["freq"][:, : self.n_profile]
+                prof = profile_anchors(batch, period, self.ecc_max, *self.profile_grid)
+                peaks["profile"] = prof
+                parts.append(self._embed_maps(prof["map"].float()))
+            return torch.cat(parts, dim=-1), peaks
 
 
 class TransitEncoder(nn.Module):
@@ -139,11 +170,20 @@ class TransitEncoder(nn.Module):
         pgram_k: int = 0,
         pgram_period_d: tuple[float, float] = (20.0, 3000.0),
         pgram_peaks: int = 0,
+        n_profile: int = 0,
+        ecc_max: float = 0.9,
     ):
         super().__init__()
         self.variant = variant
         self.pgram = (
-            PeriodogramEncoder(pgram_k, pgram_period_d, d_model, n_peaks=pgram_peaks)
+            PeriodogramEncoder(
+                pgram_k,
+                pgram_period_d,
+                d_model,
+                n_peaks=pgram_peaks,
+                n_profile=n_profile,
+                ecc_max=ecc_max,
+            )
             if pgram_k
             else None
         )
@@ -234,6 +274,63 @@ class VonMisesMixture(nn.Module):
         return torch.remainder(m0, 2 * math.pi).to(ctx.dtype)
 
 
+class AnchoredVonMises(VonMisesMixture):
+    """VonMisesMixture plus components anchored on the profile's M0 estimate at each anchor.
+
+    Anchored component (k, j): mean m0*_k + tau_k d_kj, concentration 1 / (tau_k e^{s_kj})^2,
+    with m0*_k and tau_k (refined phase and its Fisher width at period anchor k) from the data
+    and d, s, weights learned. Invalid anchors (no curvature, e.g. near-circular orbits) get
+    zero weight. A mixture of normalised von Mises densities is normalised.
+    """
+
+    LOG_KAPPA_ANCHORED = (-4.0, 20.0)
+
+    def __init__(self, ctx_dim, hidden, k, cond_dim, n_anchor, per_anchor=2):
+        super().__init__(ctx_dim, hidden, k, cond_dim)
+        self.na, self.j = n_anchor, per_anchor
+        self.extra = nn.Linear(hidden, 3 * n_anchor * per_anchor)
+        nn.init.zeros_(self.extra.weight)
+        nn.init.zeros_(self.extra.bias)
+
+    def params_anchored(self, cond, ctx, anc):
+        hid = self.net[:-1](torch.cat([ctx, cond], dim=-1))
+        out = self.net[-1](hid)
+        logits, cx, cy, log_kappa = out.split(self.k, dim=-1)
+        mu = torch.atan2(cy, cx)
+        log_kappa = log_kappa.clamp(*self.LOG_KAPPA_RANGE)
+        lead = cond.shape[:-1]
+        ex = self.extra(hid).reshape(*lead, self.na, self.j, 3)
+        lt = anc["log_tau_m0"].expand(*lead, self.na)[..., None]
+        m0a = anc["m0"].expand(*lead, self.na)[..., None]
+        valid = anc["valid_m0"].expand(*lead, self.na)[..., None].expand(*lead, self.na, self.j)
+        mu_a = m0a + torch.exp(lt) * ex[..., 1].clamp(-20.0, 20.0)
+        lk_a = (-2.0 * (lt + ex[..., 2].clamp(-5.0, 5.0))).clamp(*self.LOG_KAPPA_ANCHORED)
+        lg_a = torch.where(valid, ex[..., 0], torch.full_like(ex[..., 0], -torch.inf))
+        logits = torch.cat([logits, lg_a.flatten(-2)], dim=-1)
+        mu = torch.cat([mu, mu_a.flatten(-2)], dim=-1)
+        log_kappa = torch.cat([log_kappa, lk_a.flatten(-2)], dim=-1)
+        return torch.log_softmax(logits, dim=-1), mu, log_kappa
+
+    def log_prob(self, m0, cond, ctx, anc):
+        log_w, mu, log_kappa = self.params_anchored(cond, ctx, anc)
+        kappa = torch.exp(log_kappa)
+        lp = (
+            -2.0 * kappa * torch.sin(0.5 * (m0[..., None] - mu)) ** 2
+            - math.log(2 * math.pi)
+            - torch.log(torch.special.i0e(kappa))
+        )
+        return torch.logsumexp(log_w + lp, dim=-1)
+
+    @torch.no_grad()
+    def sample(self, cond, ctx, anc):
+        log_w, mu, log_kappa = self.params_anchored(cond, ctx, anc)
+        comp = torch.distributions.Categorical(logits=log_w).sample()
+        mu_c = mu.gather(-1, comp[..., None])[..., 0].double()
+        kappa_c = torch.exp(log_kappa.gather(-1, comp[..., None])[..., 0]).double()
+        m0 = torch.distributions.VonMises(mu_c, kappa_c).sample()
+        return torch.remainder(m0, 2 * math.pi).to(ctx.dtype)
+
+
 class AnchoredPeriodHead(nn.Module):
     """q(u_P | x): mixture of one global flow and K components anchored on periodogram peaks.
 
@@ -316,6 +413,37 @@ class AnchoredPeriodHead(nn.Module):
         return torch.cat([u[..., None] / 3.0, z], dim=-1)  # (..., B, 1 + K)
 
 
+@torch.no_grad()
+def profile_to_anchors(prof: dict, period_valid: torch.Tensor, ecc_max: float) -> dict:
+    """Profile results -> M0 anchors (position, log width, validity) and u_e features.
+
+    u_e = probit(e / e_max), so a width sigma_e in e becomes sigma_e / (e_max phi(u_e)).
+    M0 anchors need a curved profile and a width below 1 rad to be useful.
+    """
+    sig_m = prof["sigma_m0"]
+    valid_m0 = period_valid & torch.isfinite(sig_m) & (sig_m < 1.0)
+    lt_m = torch.log(sig_m.clamp(1e-7, 1.0))
+    u_e = torch.special.ndtri((prof["ecc"] / ecc_max).clamp(1e-6, 1 - 1e-6))
+    phi = torch.exp(-0.5 * u_e * u_e) / math.sqrt(2 * math.pi)
+    lt_e = torch.log((prof["sigma_e"] / (ecc_max * phi)).clamp(1e-6, 10.0))
+    valid_e = period_valid & torch.isfinite(prof["sigma_e"])
+    zero = torch.zeros_like(u_e)
+    ecc_feat = torch.stack(
+        [
+            torch.where(valid_e, u_e / 3.0, zero),
+            torch.where(valid_e, lt_e / 5.0, zero),
+            valid_e.to(u_e.dtype),
+        ],
+        -1,
+    ).flatten(1)
+    return {
+        "m0": torch.where(valid_m0, prof["m0"], zero).float(),
+        "log_tau_m0": torch.where(valid_m0, lt_m, zero).float(),
+        "valid_m0": valid_m0,
+        "ecc_feat": ecc_feat.float(),
+    }
+
+
 class NPE(nn.Module):
     """Neural posterior estimator q(u_P, u_e, M0 | transits)."""
 
@@ -337,6 +465,8 @@ class NPE(nn.Module):
         head: str = "nsf",
         n_anchor: int = 3,
         target_period_d: tuple[float, float] = (30.0, 2000.0),
+        profile: bool = False,
+        target_ecc_max: float = 0.9,
     ):
         super().__init__()
         if pgram_peaks and not pgram_k:
@@ -345,9 +475,13 @@ class NPE(nn.Module):
             raise ValueError("head must be 'nsf' or 'anchored'")
         if head == "anchored" and pgram_peaks < n_anchor:
             raise ValueError("head='anchored' needs pgram_peaks >= n_anchor")
+        if profile and head != "anchored":
+            raise ValueError("profile=True needs head='anchored'")
         self.head = head
         self.n_anchor = n_anchor
         self.target_period_d = tuple(target_period_d)
+        self.profile = profile
+        self.target_ecc_max = float(target_ecc_max)
         self.hparams = dict(
             features=features,
             d_model=d_model,
@@ -365,6 +499,8 @@ class NPE(nn.Module):
             head=head,
             n_anchor=n_anchor,
             target_period_d=list(target_period_d),
+            profile=profile,
+            target_ecc_max=float(target_ecc_max),
         )
         self.encoder = TransitEncoder(
             features,
@@ -376,6 +512,8 @@ class NPE(nn.Module):
             pgram_k,
             tuple(pgram_period_d),
             pgram_peaks,
+            n_anchor if profile else 0,
+            float(target_ecc_max),
         )
         if head == "nsf":  # joint 2-D spline flow over (u_P, u_e)
             self.flow = zuko.flows.NSF(
@@ -391,14 +529,18 @@ class NPE(nn.Module):
                 ctx_dim, n_anchor, tuple(flow_hidden), flow_transforms, flow_bins
             )
             n_feat = 1 + n_anchor
+            n_ecc_anchor = 3 * n_anchor if profile else 0
             self.ecc_flow = zuko.flows.NSF(
                 features=1,
-                context=ctx_dim + n_feat,
+                context=ctx_dim + n_feat + n_ecc_anchor,
                 transforms=flow_transforms,
                 bins=flow_bins,
                 hidden_features=list(flow_hidden),
             )
-            self.vm = VonMisesMixture(ctx_dim, flow_hidden[0], n_vm, cond_dim=n_feat + 1)
+            if profile:
+                self.vm = AnchoredVonMises(ctx_dim, flow_hidden[0], n_vm, n_feat + 1, n_anchor)
+            else:
+                self.vm = VonMisesMixture(ctx_dim, flow_hidden[0], n_vm, cond_dim=n_feat + 1)
 
     @classmethod
     def from_config(cls, cfg_model: dict) -> NPE:
@@ -413,6 +555,10 @@ class NPE(nn.Module):
         anchors = None
         if self.head == "anchored":
             anchors = anchors_from_peaks(peaks, self.n_anchor, self.target_period_d)
+            if self.profile:
+                anchors.update(
+                    profile_to_anchors(peaks["profile"], anchors["valid"], self.target_ecc_max)
+                )
         return ctx.float(), anchors
 
     def log_prob_from_context(self, v: torch.Tensor, context) -> torch.Tensor:
@@ -425,8 +571,17 @@ class NPE(nn.Module):
         u_p, u_e, m0 = v[..., 0], v[..., 1], v[..., 2]
         feat = self.period.features(u_p, anc)
         lp = self.period.log_prob(u_p, ctx, anc)
-        lp = lp + self.ecc_flow(torch.cat([ctx_b, feat], -1)).log_prob(u_e[..., None])
-        return lp + self.vm.log_prob(m0, torch.cat([feat, u_e[..., None]], -1), ctx_b)
+        lp = lp + self.ecc_flow(self._ecc_context(ctx_b, feat, anc)).log_prob(u_e[..., None])
+        cond = torch.cat([feat, u_e[..., None]], -1)
+        if self.profile:
+            return lp + self.vm.log_prob(m0, cond, ctx_b, anc)
+        return lp + self.vm.log_prob(m0, cond, ctx_b)
+
+    def _ecc_context(self, ctx_b, feat, anc):
+        parts = [ctx_b, feat]
+        if self.profile:
+            parts.append(anc["ecc_feat"].expand(*feat.shape[:-1], anc["ecc_feat"].shape[-1]))
+        return torch.cat(parts, -1)
 
     def log_prob(self, batch: dict, v: torch.Tensor, amp: bool = False) -> torch.Tensor:
         return self.log_prob_from_context(v, self.context(batch, amp))
@@ -448,8 +603,12 @@ class NPE(nn.Module):
         else:
             u_p = self.period.sample(n, ctx, anc)
             feat = self.period.features(u_p, anc)
-            u_e = self.ecc_flow(torch.cat([ctx_b, feat], -1)).sample()[..., 0]
-            m0 = self.vm.sample(torch.cat([feat, u_e[..., None]], -1), ctx_b)
+            u_e = self.ecc_flow(self._ecc_context(ctx_b, feat, anc)).sample()[..., 0]
+            cond = torch.cat([feat, u_e[..., None]], -1)
+            if self.profile:
+                m0 = self.vm.sample(cond, ctx_b, anc)
+            else:
+                m0 = self.vm.sample(cond, ctx_b)
             v = torch.stack([u_p, u_e, m0], dim=-1)
         if with_log_prob:
             return v, self.log_prob_from_context(v, context)

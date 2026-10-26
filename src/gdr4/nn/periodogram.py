@@ -36,15 +36,13 @@ def frequency_grid(period_min_d: float, period_max_d: float, k: int) -> torch.Te
     return torch.linspace(1.0 / period_max_d, 1.0 / period_min_d, k, dtype=torch.float64)
 
 
-@torch.no_grad()
-def circular_periodogram(batch: dict, freqs: torch.Tensor, chunk: int = 64) -> torch.Tensor:
-    """Delta chi^2 of the best circular orbit at each frequency, shape (B, K), float64.
+def single_star_terms(batch: dict):
+    """float64 pieces shared by the periodogram and the orbit profile.
 
-    ``freqs`` (cycles/day) is either one grid shared by all stars, shape (K,), or one grid per
-    star, shape (B, K).
+    Returns t (B,N), cos psi, sin psi, weights W = mask / sigma^2, residual r, the 5-parameter
+    design matrix M5 (B,N,5) and (M5^T W M5)^-1 (B,5,5).
     """
-    dev = batch["t_d"].device
-    f64 = torch.float64
+    dev, f64 = batch["t_d"].device, torch.float64
     t = batch["t_d"].to(f64)
     psi = batch["psi_rad"].to(f64)
     mask = batch["mask"]
@@ -56,7 +54,19 @@ def circular_periodogram(batch: dict, freqs: torch.Tensor, chunk: int = 64) -> t
     m5 = torch.stack([sp, cp, batch["plx_factor"].to(f64), t_yr * sp, t_yr * cp], -1)  # (B,N,5)
     h5 = torch.einsum("bn,bnp,bnq->bpq", w, m5, m5)
     h5 = h5 + 1e-9 * torch.eye(5, dtype=f64, device=dev)  # guard fully masked rows
-    h5_inv = torch.linalg.inv(h5)
+    return t, cp, sp, w, r, m5, torch.linalg.inv(h5)
+
+
+@torch.no_grad()
+def circular_periodogram(batch: dict, freqs: torch.Tensor, chunk: int = 64) -> torch.Tensor:
+    """Delta chi^2 of the best circular orbit at each frequency, shape (B, K), float64.
+
+    ``freqs`` (cycles/day) is either one grid shared by all stars, shape (K,), or one grid per
+    star, shape (B, K).
+    """
+    f64 = torch.float64
+    t, cp, sp, w, r, m5, h5_inv = single_star_terms(batch)
+    dev = t.device
     freqs = freqs.to(dev, f64)
     if freqs.dim() == 1:
         freqs = freqs.expand(t.shape[0], -1)
