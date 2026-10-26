@@ -81,3 +81,23 @@ Scripts: `scripts/diagnostics/`.
     wrong-period rate 63.9% → 56.2%; ~5% slower. Single seed and 144 stars (binomial sd
     ≈ 4 pp), so this is suggestive, not conclusive. Both variants are far from converged.
 - Kept on in `configs/killtest.yaml`; `pgram_peaks: 0` is the ablation. Needs my approval.
+
+## 2026-10-27 (later): 1.5 h local check with peak features vs without
+
+Same config, seed, data and time budget; only `pgram_peaks` differs (0 vs 8). Toy scan law,
+small model, CPU; **pipeline check, not counted**. Evaluation on the 300-star smoke test set.
+
+| S/N > 6 (144 stars)                         | no peaks | peaks |
+|---|---|---|
+| period recovered (median within 10%)        | 91.0%    | 98.6% |
+| wrong-period rate                           | 9.7%     | 2.8%  |
+| wrong-period rate, sigma 20% too small      | 8.3%     | 3.5%  |
+| coverage error nominal / sigma_inflated_1.2 | 2.0 / 6.7 pp | 3.3 / 2.3 pp |
+| C2ST ≤ 0.65 (of 20 reference stars)         | 9        | 9     |
+
+- 12 of the 14 earlier wrong-period stars fixed, 2 new ones (paired exact McNemar test,
+  two-sided p ≈ 0.013). Training randomness is not covered (one seed per variant).
+- All 4 remaining failures have P = 1447–1653 d, close to the ~1977 d baseline, where the
+  circular periodogram peak itself is biased low.
+- C2ST unchanged: the high-S/N blurriness comes from the flow head, not period finding.
+- Peaks run reached step 3389 vs 3555 (about 5% slower per step).
