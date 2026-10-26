@@ -101,3 +101,30 @@ small model, CPU; **pipeline check, not counted**. Evaluation on the 300-star sm
   circular periodogram peak itself is biased low.
 - C2ST unchanged: the high-S/N blurriness comes from the flow head, not period finding.
 - Peaks run reached step 3389 vs 3555 (about 5% slower per step).
+
+## 2026-10-27 (later): fixing the C2ST blurriness, anchored heads
+
+Local 1.5 h runs, same config/seed/data (toy scan law, CPU; **not counted**), evaluated on the
+300-star smoke test set and 20 reference stars. Code: `f262e26`, `41b80bf`; docs §5c, §5d.
+
+| | peaks only | + anchored period head | + (e, M0) profile |
+|---|---|---|---|
+| training steps in 1.5 h      | 3389  | 3245  | 1597  |
+| best val loss                | 1.93  | 0.48  | −1.55 |
+| coverage error (nominal)     | 3.3 pp | 3.0 pp | 2.3 pp |
+| period recovered, S/N > 6    | 98.6% | 99.3% | 98.6% |
+| C2ST ≤ 0.65 (of 20)          | 9     | 9     | 13    |
+| ms/star CPU, single / batched| 21.5 / 10.4 | 20.5 / 9.7 | 71.5 / 17.4 |
+
+- Toy benchmark first (`scripts/diagnostics/bench_flow_head.py`): a plain or moment-standardised
+  flow stays ~45× too wide at width 1e-4. Cause: a network cannot output a location to 1e-4
+  from scratch. Fix: anchor on data-derived locations and Fisher widths (docs §5c).
+- Anchored period head alone fixed the period dimension (per-dim C2ST 0.51–0.69 up to S/N 45)
+  but e and M0 stayed 4–48× too wide, so joint C2ST did not move.
+- Adding the (e, M0) profile: all 12 stars with S/N ≤ 6 pass; S/N 11–23 at 0.69–0.75;
+  S/N 27–98 still fail (0.90–1.00). For stars 9 and 10 the circular-periodogram anchor is
+  19 and 5.5 posterior widths off-centre (eccentric orbits shift the circular peak).
+- Timing: the profile makes single-star CPU inference 71.5 ms (> 50 ms gate); needs measuring
+  on the Kaggle GPU, where the gate applies.
+- Next options: Keplerian re-refinement of the period anchor at (e*, M0*); longer training
+  (this run had half the steps and its loss was still falling).
