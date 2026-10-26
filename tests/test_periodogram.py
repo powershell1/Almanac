@@ -79,7 +79,7 @@ def test_refined_peak_matches_dense_grid():
     grid = frequency_grid(20.0, 3000.0, 512)
     pg = circular_periodogram(batch, grid)
     idx, _ = top_peaks(pg, 1)
-    f_ref, h_ref = refine_peaks(batch, grid, idx)
+    f_ref, h_ref, _ = refine_peaks(batch, grid, idx)
     dense = frequency_grid(20.0, 3000.0, 512 * 32)
     pg_dense = circular_periodogram(batch, dense)
     step = (grid[1] - grid[0]).item()

@@ -113,7 +113,7 @@ def _c2st_vs_reference(v_npe, ref_dir: Path, ecfg, rng):
             continue
         row = {"star": i, "ess": float(z["ess"]), "c2st": None}
         if z["ess"] >= ecfg.get("c2st_min_ess", 2000):
-            n = int(ecfg.get("c2st_n_samples", 2000))
+            n = min(int(ecfg.get("c2st_n_samples", 2000)), v_npe.shape[0], len(z["v"]))
             ref = z["v"][rng.choice(len(z["v"]), size=n, replace=False), :3]
             npe = v_npe[rng.choice(v_npe.shape[0], size=n, replace=False), i]
             row["c2st"] = c2st_accuracy(circular_embed(npe), circular_embed(ref), seed=i)

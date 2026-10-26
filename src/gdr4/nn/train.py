@@ -42,6 +42,16 @@ def _lr_lambda(warmup: int, total: int):
     return f
 
 
+def check_model_matches_prior(cfg: dict) -> None:
+    """The anchored head maps periods into the prior's u_P coordinate, so its range must match."""
+    m = cfg["model"]
+    if m.get("head", "nsf") == "anchored":
+        want = [float(x) for x in cfg["prior"]["period_d"]]
+        got = [float(x) for x in m.get("target_period_d", (30.0, 2000.0))]
+        if got != want:
+            raise SystemExit(f"model.target_period_d {got} must equal prior.period_d {want}")
+
+
 def _save_atomic(obj, path: Path):
     tmp = path.with_suffix(".tmp")
     torch.save(obj, tmp)
@@ -61,6 +71,7 @@ def train(cfg: dict, shards_dir: Path, ckpt_dir: Path, results_dir: Path, log=pr
         torch.cuda.set_device(device)
     amp = bool(tcfg.get("amp", False)) and device.type == "cuda"
     prior = Prior.from_config(cfg["prior"])
+    check_model_matches_prior(cfg)
 
     shards = list_complete(shards_dir)
     n_val = int(tcfg["val_shards"])

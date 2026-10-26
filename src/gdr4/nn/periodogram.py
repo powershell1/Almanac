@@ -92,10 +92,16 @@ def top_peaks(pg: torch.Tensor, n: int) -> tuple[torch.Tensor, torch.Tensor]:
 
 @torch.no_grad()
 def refine_peaks(batch: dict, grid: torch.Tensor, idx: torch.Tensor, n_fine: int = 9):
-    """Sub-grid frequency (cycles/day) and height of each peak in ``idx`` (B, n).
+    """Sub-grid frequency (cycles/day), height and curvature of each peak in ``idx`` (B, n).
 
     Evaluates Delta chi^2 at ``n_fine`` points spanning +-1 coarse grid step around each peak,
     then fits a parabola through the highest fine point and its two neighbours.
+
+    Returns
+    -------
+    freq, height, d2 : (B, n) float64
+        Vertex frequency, vertex height and second derivative d^2(Delta chi^2)/df^2
+        (negative at a proper maximum).
     """
     grid = grid.to(idx.device, torch.float64)
     step = grid[1] - grid[0]
@@ -112,10 +118,35 @@ def refine_peaks(batch: dict, grid: torch.Tensor, idx: torch.Tensor, n_fine: int
     h_fine = offsets[1] - offsets[0]
     freq = fine.gather(-1, j)[..., 0] + delta * h_fine
     height = y0 - 0.25 * (ym - yp) * delta
-    return freq, height.clamp_min(0.0)
+    return freq, height.clamp_min(0.0), curv / h_fine**2
+
+
+@torch.no_grad()
+def analyse_peaks(batch: dict, grid: torch.Tensor, pg: torch.Tensor, n: int) -> dict:
+    """Top ``n`` refined peaks of ``pg``, highest first: freq, height, d2, valid (B, n)."""
+    idx, valid = top_peaks(pg, n)
+    freq, height, d2 = refine_peaks(batch, grid, idx)
+    height = torch.where(valid, height, torch.zeros_like(height))
+    order = height.argsort(dim=1, descending=True)
+    return {
+        k: x.gather(1, order)
+        for k, x in (("freq", freq), ("height", height), ("d2", d2), ("valid", valid))
+    }
 
 
 N_PEAK_FEATURES = 4
+
+
+def features_from_peaks(peaks: dict, period_range_d: tuple[float, float]) -> torch.Tensor:
+    """(B, n, 4) float32: log-period scaled to [0, 1] over ``period_range_d``,
+    log(1 + Delta chi^2), that value minus the highest peak's, and a validity flag."""
+    valid = peaks["valid"]
+    lo, hi = math.log(period_range_d[0]), math.log(period_range_d[1])
+    x = (-torch.log(peaks["freq"]) - lo) / (hi - lo)
+    lh = torch.log1p(peaks["height"])
+    rel = lh - lh[:, :1]
+    feats = torch.stack([x, lh, rel, valid.to(lh.dtype)], dim=-1)
+    return torch.where(valid[..., None], feats, torch.zeros_like(feats)).float()
 
 
 @torch.no_grad()
@@ -126,19 +157,34 @@ def peak_features(
     n_peaks: int,
     period_range_d: tuple[float, float],
 ) -> torch.Tensor:
-    """(B, n_peaks, 4) float32 features of the highest periodogram peaks, highest first.
+    """(B, n_peaks, 4) float32 features of the highest periodogram peaks, highest first."""
+    return features_from_peaks(analyse_peaks(batch, grid, pg, n_peaks), period_range_d)
 
-    Per peak: log-period scaled to [0, 1] over ``period_range_d``, log(1 + Delta chi^2),
-    that value minus the highest peak's, and a validity flag (missing peaks are all zeros).
+
+@torch.no_grad()
+def anchors_from_peaks(peaks: dict, n: int, target_period_d: tuple[float, float]) -> dict:
+    """Anchors for the period posterior from the ``n`` highest peaks (see docs, section 5c).
+
+    For each peak: its position in the flow's target coordinate
+    ``u_P = probit((log P - log P_min) / (log P_max - log P_min))``, and the circular-orbit
+    Fisher width there, ``tau = sigma_f / (f R phi(u_P))`` with
+    ``sigma_f = sqrt(2 / -d2)`` (Delta chi^2 = -2 Delta log L, so d2 log L / df2 = d2 / 2).
+    Peaks outside the prior period range or without negative curvature are invalid; invalid
+    entries are set to a = 0, log_tau = 0 so that downstream arithmetic stays finite.
     """
-    idx, valid = top_peaks(pg, n_peaks)
-    freq, height = refine_peaks(batch, grid, idx)
-    height = torch.where(valid, height, torch.zeros_like(height))
-    order = height.argsort(dim=1, descending=True)
-    freq, height, valid = (x.gather(1, order) for x in (freq, height, valid))
-    lo, hi = math.log(period_range_d[0]), math.log(period_range_d[1])
-    x = (-torch.log(freq) - lo) / (hi - lo)
-    lh = torch.log1p(height)
-    rel = lh - lh[:, :1]
-    feats = torch.stack([x, lh, rel, valid.to(lh.dtype)], dim=-1)
-    return torch.where(valid[..., None], feats, torch.zeros_like(feats)).float()
+    f = peaks["freq"][:, :n]
+    d2 = peaks["d2"][:, :n]
+    lo, hi = math.log(target_period_d[0]), math.log(target_period_d[1])
+    frac = (-torch.log(f) - lo) / (hi - lo)
+    valid = peaks["valid"][:, :n] & (d2 < 0) & (frac > 0) & (frac < 1)
+    frac = frac.clamp(1e-6, 1 - 1e-6)
+    a = torch.special.ndtri(frac)
+    phi = torch.exp(-0.5 * a * a) / math.sqrt(2 * math.pi)
+    sigma_f = torch.sqrt(2.0 / (-d2).clamp_min(1e-300))
+    log_tau = torch.log(sigma_f / (f * (hi - lo) * phi)).clamp(math.log(1e-7), math.log(3.0))
+    zero = torch.zeros_like(a)
+    return {
+        "a": torch.where(valid, a, zero).float(),
+        "log_tau": torch.where(valid, log_tau, zero).float(),
+        "valid": valid,
+    }

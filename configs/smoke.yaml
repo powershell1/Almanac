@@ -54,6 +54,9 @@ model:
   pgram_k: 128
   pgram_period_d: [20, 3000]
   pgram_peaks: 4
+  head: anchored
+  n_anchor: 3
+  target_period_d: [30, 2000]   # must equal prior.period_d
 
 training:
   batch_size: 128

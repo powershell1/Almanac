@@ -60,6 +60,9 @@ model:
   pgram_k: 512             # analytic circular-orbit periodogram input (0 = off; ablation)
   pgram_period_d: [20, 3000]
   pgram_peaks: 8              # top periodogram peaks as explicit inputs (0 = off; ablation)
+  head: anchored           # period posterior anchored on periodogram peaks (nsf = old head)
+  n_anchor: 3
+  target_period_d: [30, 2000]   # must equal prior.period_d
 
 training:
   batch_size: 512

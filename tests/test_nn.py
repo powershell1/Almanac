@@ -133,3 +133,81 @@ def test_npe_with_periodogram_peaks(batch_and_prior):
 def test_peaks_require_periodogram():
     with pytest.raises(ValueError):
         NPE(**{**SMALL, "pgram_peaks": 4})
+
+
+ANCHORED = {
+    **SMALL,
+    "pgram_k": 64,
+    "pgram_peaks": 4,
+    "head": "anchored",
+    "n_anchor": 3,
+    "target_period_d": (30.0, 2000.0),
+}
+
+
+def _anchored_model_and_context(batch, seed=0):
+    torch.manual_seed(seed)
+    model = NPE(**ANCHORED).eval()
+    with torch.no_grad():  # random (non-zero) mixture weights, shifts and scales
+        model.period.par[-1].weight.normal_(0, 0.3)
+        model.period.par[-1].bias.normal_(0, 0.3)
+    return model, model.context(batch)
+
+
+def test_anchored_period_density_integrates_to_one(batch_and_prior):
+    batch, _ = batch_and_prior
+    model, (ctx, anc) = _anchored_model_and_context(batch)
+    for i in range(4):
+        c, a = ctx[i : i + 1], {k: v[i : i + 1] for k, v in anc.items()}
+        # broad grid plus fine grids around every anchor (components can be ~1e-4 wide)
+        grids = [torch.linspace(-12, 12, 40001)]
+        for k in range(3):
+            w = 60 * torch.exp(a["log_tau"][0, k] + 5.0)
+            mid = a["a"][0, k] + torch.exp(a["log_tau"][0, k]) * 50 * torch.tensor([-1.0, 1.0])
+            lo, hi = min(mid[0] - w, a["a"][0, k] - w), max(mid[1] + w, a["a"][0, k] + w)
+            grids.append(torch.linspace(lo.item(), hi.item(), 40001))
+        u = torch.sort(torch.cat(grids)).values
+        with torch.no_grad():
+            dens = torch.exp(model.period.log_prob(u[:, None].double().float(), c, a))[:, 0]
+        assert abs(torch.trapezoid(dens, u).item() - 1.0) < 2e-3, i
+
+
+def test_anchored_samples_match_density(batch_and_prior):
+    batch, _ = batch_and_prior
+    model, (ctx, anc) = _anchored_model_and_context(batch, seed=1)
+    i = 0
+    c, a = ctx[i : i + 1], {k: v[i : i + 1] for k, v in anc.items()}
+    with torch.no_grad():
+        s = model.period.sample(40000, c, a)[:, 0]
+        lo, hi = s.quantile(0.2).item(), s.quantile(0.7).item()
+        u = torch.linspace(lo, hi, 20001)
+        mass = torch.trapezoid(torch.exp(model.period.log_prob(u[:, None], c, a))[:, 0], u)
+    frac = ((s > lo) & (s < hi)).float().mean().item()
+    assert abs(mass.item() - frac) < 0.015
+
+
+def test_anchored_npe_trains_samples_and_ignores_padding(batch_and_prior):
+    batch, _ = batch_and_prior
+    torch.manual_seed(0)
+    model = NPE(**ANCHORED)
+    loss = model(batch, batch["v"])
+    loss.backward()
+    assert torch.isfinite(loss)
+    for name in ("period.par.0.weight", "ecc_flow.transform.transforms.0.hyper.0.weight"):
+        assert dict(model.named_parameters())[name].grad is not None, name
+    model.eval()
+    v, lq = model.sample(batch, 5, with_log_prob=True)
+    assert v.shape == (5, 16, 3) and torch.isfinite(lq).all()
+    assert ((v[..., 2] >= 0) & (v[..., 2] < 2 * math.pi)).all()
+    padded = dict(batch)
+    for k in ("t_d", "psi_rad", "plx_factor", "sigma_mas", "resid5_mas"):
+        padded[k] = torch.cat([batch[k], torch.full((16, 7), 3.0)], dim=1)
+    padded["mask"] = torch.cat([batch["mask"], torch.zeros(16, 7, dtype=bool)], dim=1)
+    assert torch.allclose(
+        model.log_prob(batch, batch["v"]), model.log_prob(padded, batch["v"]), atol=1e-3
+    )
+
+
+def test_anchored_requires_enough_peaks():
+    with pytest.raises(ValueError):
+        NPE(**{**ANCHORED, "pgram_peaks": 2})

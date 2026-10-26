@@ -176,6 +176,42 @@ Why: on the local check the periodogram peaked at the true period for 10 of the 
 failures, but the network did not read the position out precisely (research log 2026-10-27).
 Giving it several peaks also lets it compare aliases and harmonics (P, P/2, ...).
 
+## 5c. Anchored period head (`nn/model.py: AnchoredPeriodHead`, `model.head: anchored`)
+
+**Problem.** At high S/N the exact posterior of u_P is ~1e-4 wide. A flow must then output a
+location to ~1e-4 precision; a network regressing a location from scratch reaches only
+~1e-2–1e-3 (benchmark: `scripts/diagnostics/bench_flow_head.py`). The result was posteriors
+20–5000× too wide and C2ST ≈ 1 (research log 2026-10-27).
+
+**Idea.** The data already contain a precise location and width: the refined periodogram peak
+f* (§5b) and the curvature of Δχ² there. Since Δχ² = −2 Δlog L, (log L)'' = ½ (Δχ²)'', so the
+circular-orbit Fisher width in frequency is σ_f = √(2 / −(Δχ²)''). Changing variables to the
+flow's coordinate u_P = Φ⁻¹(frac), frac = (log P − log P_min)/R, P = 1/f:
+
+    du_P/df = −1 / (f R φ(u_P))   ⇒   τ = σ_f / (f R φ(u_P)).
+
+On the 20 local reference stars with S/N ≥ 3, τ matched the exact posterior width to within a
+factor 0.5–1.5 (8 of 9 stars), and the top peak was the right one for every star with S/N ≥ 1.8.
+
+**Model.** q(u_P | x) is a mixture of K + 1 components:
+
+- global: a 1-D spline flow on u_P (broad, low-S/N posteriors);
+- anchored, k = 1..K (top K peaks): u_P = a_k + τ_k (d_k + e^{s_k} z), z ~ g(z | ctx, k), with
+  a_k, τ_k from the data and d_k, s_k, g learned. By change of variables
+  q_k(u_P) = g(z) / (τ_k e^{s_k}).
+
+Each component is a normalised density on ℝ, so the mixture is (tested numerically to 0.2%).
+The network only produces O(1) numbers; the zoom comes from physics. Then
+
+    q(u_P, u_e, M0 | x) = q(u_P | x) · q(u_e | u_P, x) · q_vM(M0 | u_P, u_e, x),
+
+where u_e and M0 are conditioned on u_P and on z_k = (u_P − a_k)/τ_k for each anchor. That lets
+them resolve changes in u_P of order τ, which matters because M0 and P are strongly coupled.
+
+Exercises: derive τ; show the anchored component integrates to 1; explain why a narrow but
+wrongly centred anchor (|d_k| ≫ 1) would be hard to learn, and how the global and other anchored
+components cover that case.
+
 ## 6. Calibration metrics (`eval/calibration.py`)
 
 - **HPD coverage (expected coverage).** For each test star, the credibility level of the true
