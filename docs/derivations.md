@@ -212,6 +212,32 @@ Exercises: derive τ; show the anchored component integrates to 1; explain why a
 wrongly centred anchor (|d_k| ≫ 1) would be hard to learn, and how the global and other anchored
 components cover that case.
 
+## 5d. Eccentricity–phase profile (`nn/orbit_profile.py`, `model.profile: true`)
+
+**Problem.** With the period fixed by §5c, the remaining C2ST failure came from e and M0: at
+S/N > 10 the network's posteriors were 4–20× (u_e) and 12–270× (M0) wider than the exact ones
+(research log 2026-10-27). Like the period before §5b, the network had to discover the orbit's
+shape from raw transits.
+
+**Feature.** At fixed (P, e, M0) the model is linear in all nine linear parameters (§2), so the
+best-fit χ² is exact. The same projection as §5b, with the Thiele-Innes columns
+`X cos ψ, X sin ψ, Y cos ψ, Y sin ψ` (X, Y from Kepler's equation, §1), gives
+Δχ²(P, e, M0) = χ²₅ − χ²₉(P, e, M0). At each of the K anchor periods (the top periodogram peaks)
+it is evaluated on an 8 × 16 grid in (e, M0) and fed to a small CNN (circular padding in M0).
+
+**Anchors.** Around the best grid point, two rounds of 3 × 3 local grids (±1 and ±¼ grid step)
+with a parabola per axis give refined (e*, M0*) and curvatures; σ = √(2 / −Δχ²'') as in §5c.
+For e the width is converted to u_e = Φ⁻¹(e / e_max) units: τ_e = σ_e / (e_max φ(u_e)).
+- The eccentricity flow is conditioned on (u_e*, log τ_e) of each anchor.
+- The phase posterior gets extra von Mises components centred at M0*_k + τ_k d with concentration
+  1 / (τ_k e^s)², alongside the free components (`AnchoredVonMises`). Anchors whose profile is not
+  curved in M0 (near-circular orbits, where M0 is undefined) get zero weight.
+
+Checks: Δχ² equals a direct 9-parameter fit to 1e-7; at the true period the refined (e, M0) are
+within 0.05 of the truth for bright eccentric stars; the anchored phase density integrates to 1.
+
+Exercise: why is M0 undefined for a circular orbit, and what does that do to the curvature?
+
 ## 6. Calibration metrics (`eval/calibration.py`)
 
 - **HPD coverage (expected coverage).** For each test star, the credibility level of the true
