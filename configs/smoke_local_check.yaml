@@ -79,6 +79,7 @@ training:
 evaluation:
   n_posterior_samples: 500
   levels: [0.5, 0.68, 0.9]
+  reference_noise_model: nominal
   snr_key: snr_a0
   snr_min: 6.0
   period_tol: 0.1

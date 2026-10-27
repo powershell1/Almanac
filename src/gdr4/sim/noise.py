@@ -76,8 +76,12 @@ class NoiseModel:
     harmonic_amp_mas: dict[int, float] = field(default_factory=dict)
     sigma_scale_range: tuple[float, float] | None = None
 
-    def apply(self, rng, w_clean_mas, sigma_mas, psi_rad, mask):
-        """Return noisy abscissae, shape like ``w_clean_mas`` (n_star, n_transit)."""
+    def apply(self, rng, w_clean_mas, sigma_mas, psi_rad, mask, return_scale=False):
+        """Return noisy abscissae, shape like ``w_clean_mas`` (n_star, n_transit).
+
+        With ``return_scale`` also return each star's multiplicative noise scale (n_star,)
+        (sigma_scale times its own kappa draw). The random draws are the same either way.
+        """
         n_star, n_tr = w_clean_mas.shape
         scale = self.sigma_scale
         if self.sigma_scale_range is not None:
@@ -96,7 +100,10 @@ class NoiseModel:
                 raise ValueError("use odd harmonics only (see docstring)")
             phase = rng.uniform(0.0, 2 * np.pi, (n_star, 1))
             noise += amp * np.cos(k * psi_rad + phase)
-        return np.where(mask, w_clean_mas + noise, 0.0)
+        w = np.where(mask, w_clean_mas + noise, 0.0)
+        if return_scale:
+            return w, np.broadcast_to(np.asarray(scale, float), (n_star, 1))[:, 0].copy()
+        return w
 
 
 # The misspecification strengths below are placeholders chosen to be comparable to the

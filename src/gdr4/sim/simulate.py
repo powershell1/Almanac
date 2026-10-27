@@ -54,7 +54,8 @@ def simulate_batch(
         ``w_mas``, ``sigma_mas``, ``resid5_mas``, ``mask``. Per-star arrays: ``period_d``,
         ``ecc``, ``mean_anom0_rad``, ``amp_scale_mas``, ``theta_lin`` (n, 9), ``gmag``,
         ``pix``, ``n_obs``, ``chi2_5p``, ``a0_mas``, ``snr_a0`` (a0 / sigma_transit),
-        ``snr_mf`` (matched-filter S/N of the orbit signal).
+        ``snr_mf`` (matched-filter S/N of the orbit signal), ``noise_scale`` (true noise /
+        reported sigma).
     """
     pix = rng.integers(0, scan.n_pix, n)
     t_d, psi, plx = scan.t_d[pix], scan.psi_rad[pix], scan.plx_factor[pix]
@@ -73,7 +74,7 @@ def simulate_batch(
     w_clean = np.einsum("snk,sk->sn", m, theta_lin)
     w_orbit = np.einsum("snk,sk->sn", m[..., N_5P:], theta_lin[:, N_5P:])
     sigma = np.where(mask, sigma_transit_mas(gmag)[:, None], 1.0)
-    w_obs = noise.apply(rng, w_clean, sigma, psi, mask)
+    w_obs, noise_scale = noise.apply(rng, w_clean, sigma, psi, mask, return_scale=True)
 
     _, resid5, chi2_5p, _ = wls_fit(design_matrix_5p(t_d, psi, plx), w_obs, sigma, mask)
     a0 = photocentre_semimajor_axis(*theta_lin[:, N_5P:].T)
@@ -100,6 +101,7 @@ def simulate_batch(
         "a0_mas": a0,
         "snr_a0": a0 / sigma_transit_mas(gmag),
         "snr_mf": snr_mf,
+        "noise_scale": noise_scale,
     }
 
 

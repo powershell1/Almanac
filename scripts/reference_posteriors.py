@@ -17,6 +17,7 @@ from joblib import Parallel, delayed  # noqa: E402
 from gdr4.cli import base_parser, parse  # noqa: E402
 from gdr4.data.shards import gather_padded, read_shard  # noqa: E402
 from gdr4.reference.bruteforce import reference_posterior  # noqa: E402
+from gdr4.sim.noise import get_noise_model  # noqa: E402
 from gdr4.sim.priors import Prior  # noqa: E402
 from gdr4.sim.simulate import star_view  # noqa: E402
 from gdr4.utils import load_yaml, resolve, write_run_info  # noqa: E402
@@ -24,7 +25,7 @@ from gdr4.utils import load_yaml, resolve, write_run_info  # noqa: E402
 N_KEEP = 20000  # resampled posterior draws stored per star
 
 
-def run_one(i, star, prior_cfg, ref_cfg, out_dir, entropy):
+def run_one(i, star, prior_cfg, ref_cfg, out_dir, entropy, krange):
     out = out_dir / f"star_{i:05d}.npz"
     if out.exists():
         return i, "skip"
@@ -39,10 +40,12 @@ def run_one(i, star, prior_cfg, ref_cfg, out_dir, entropy):
         n_refine_samples=int(ref_cfg["n_refine_samples"]),
         refine_rounds=int(ref_cfg["refine_rounds"]),
         chunk=int(ref_cfg["chunk"]),
+        noise_scale_range=krange,
     )
     tmp = out.with_suffix(".tmp.npz")
     np.savez(
         tmp,
+        noise_scale_marginalised=krange is not None,
         v=r.resample(rng, N_KEEP),
         ess=r.ess,
         ess_stage1=r.ess_stage1,
@@ -66,17 +69,30 @@ def main():
     if args.stars:
         a, _, b = args.stars.partition("-")
         lo, hi = int(a), int(b or a)
-    shard = read_shard(resolve(cfg, "test_dir", args.root) / "nominal", 0)
+    # References use the evaluation's reference test set and marginalise the same noise model
+    # the network was trained on (consistency rule, CLAUDE.md).
+    ref_noise = cfg["evaluation"].get("reference_noise_model", "nominal")
+    krange = get_noise_model(cfg["simulation"]["noise_model"]).sigma_scale_range
+    shard = read_shard(resolve(cfg, "test_dir", args.root) / ref_noise, 0)
     idx = np.arange(lo, min(hi, n_ref - 1) + 1)
     batch = gather_padded(shard, idx)
     out_dir = resolve(cfg, "reference_dir", args.root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    write_run_info(out_dir, cfg, {"stage": "reference", "stars": [int(lo), int(hi)]})
+    write_run_info(
+        out_dir,
+        cfg,
+        {
+            "stage": "reference",
+            "stars": [int(lo), int(hi)],
+            "test_set": ref_noise,
+            "noise_scale_range": krange,
+        },
+    )
     entropy = int(seeds["test_entropy"]) + 1  # sampler randomness, distinct from the test draws
     t0 = time.time()
     jobs = (
         delayed(run_one)(
-            int(i), star_view(batch, k), cfg["prior"], cfg["reference"], out_dir, entropy
+            int(i), star_view(batch, k), cfg["prior"], cfg["reference"], out_dir, entropy, krange
         )
         for k, i in enumerate(idx)
     )

@@ -88,6 +88,7 @@ evaluation:
   n_posterior_samples: 2000
   levels: [0.5, 0.68, 0.9]
   # Pre-registered kill-test definitions (CLAUDE.md). OPEN: confirm before the first counted run.
+  reference_noise_model: nominal  # test set for references, C2ST (OPEN: scale_prior if it gates)
   snr_key: snr_a0          # S/N = a0 / sigma_transit (Casertano-style). Alternative: snr_mf
   snr_min: 6.0
   period_tol: 0.1          # "recovered" = posterior median P within 10% of the truth

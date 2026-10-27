@@ -121,20 +121,29 @@ def _c2st_vs_reference(v_npe, ref_dir: Path, ecfg, rng):
     return rows
 
 
-def _reference_self_calibration(ref_dir: Path, v_true, alphas):
-    """Marginal coverage of the *reference* posteriors themselves (sanity check of the sampler)."""
+def _reference_self_calibration(ref_dir: Path, v_true, alphas, noise_scale=None):
+    """Marginal coverage of the *reference* posteriors themselves (sanity check of the sampler).
+
+    If the references marginalise the noise scale and the test set records the true one, log
+    kappa is checked too.
+    """
     files = sorted(ref_dir.glob("star_*.npz"))
     if not files:
         return None
-    ranks = {0: [], 1: []}
+    names = {0: "u_P", 1: "u_e"}
+    ranks = {0: [], 1: [], 4: []}
     for f in files:
         z = np.load(f)
         i = int(z["star_index"])
-        for d in ranks:
+        for d in (0, 1):
             ranks[d].append(np.mean(z["v"][:, d] < v_true[i, d]))
+        if noise_scale is not None and z["v"].shape[1] == 5:
+            ranks[4].append(np.mean(z["v"][:, 4] < np.log(noise_scale[i])))
+    if ranks[4]:
+        names[4] = "log_kappa"
     return {
         name: central_interval_coverage(np.array(ranks[d]), alphas).tolist()
-        for d, name in ((0, "u_P"), (1, "u_e"))
+        for d, name in names.items()
     } | {"n_stars": len(files)}
 
 
@@ -240,15 +249,18 @@ def evaluate(cfg: dict, model, test_dir: Path, ref_dir: Path, out_dir: Path, dev
             ecc_true=truth["ecc"],
             n_obs=np.asarray(shard["n_obs"]),
         )
+        if noise == ecfg.get("reference_noise_model", "nominal") and ref_dir.exists():
+            c2st_rows = _c2st_vs_reference(v_s, ref_dir, ecfg, rng)
+            metrics["reference_self_calibration"] = _reference_self_calibration(
+                ref_dir,
+                v_true,
+                ecfg["levels"],
+                np.asarray(shard["noise_scale"]) if "noise_scale" in shard else None,
+            )
         if noise == "nominal":
             np.savez(
                 out_dir / "samples_nominal_first200.npz", v=v_s[:500, :200], v_true=v_true[:200]
             )
-            if ref_dir.exists():
-                c2st_rows = _c2st_vs_reference(v_s, ref_dir, ecfg, rng)
-                metrics["reference_self_calibration"] = _reference_self_calibration(
-                    ref_dir, v_true, ecfg["levels"]
-                )
             lat, thr = time_inference(model, shard, prior, int(ecfg["n_posterior_samples"]), device)
             timing = {
                 "ms_per_star_single": lat,
