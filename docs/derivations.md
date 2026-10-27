@@ -281,7 +281,7 @@ the start and at the end of the data.)
 
 ---
 
-## 7. Unknown noise scale (`noise_model: scale_prior`, proposed)
+## 7. Unknown noise scale (`noise_model: scale_prior`, `model.noise_rescale`)
 
 **Problem.** If the reported per-transit errors σ are too small by a factor κ, every analysis
 that trusts σ, including the exact posterior, is over-confident. Measured locally
@@ -307,3 +307,16 @@ errors are under-estimated. This is the astrometric analogue of an RV "jitter" t
   (κ = 0.8, 1, 1.2) become conditional checks; values outside the prior range stay
   genuine misspecification tests.
 - The κ range is a placeholder (0.8–1.5); justify it from Gaia error-inflation studies.
+
+**Feature normalisation (`noise_rescale`).** Training on κ alone did not help within the local
+budget: the network did not learn to judge Δχ² against the actual noise level. So the noise
+scale is estimated from the data and the physics features are made noise-invariant:
+
+    κ̂² = (χ²₅ − max_k Δχ²(P_k*, e_k*, M0_k*)) / (N − 12),
+
+the residual χ² per degree of freedom after the best Keplerian fit (5 + 4 linear + 3 nonlinear
+parameters). Under σ → cσ every χ² scales by 1/c² and every Fisher width by c, so Δχ²/κ̂² and
+τ·κ̂ are unchanged; log κ̂ itself is given to the network as an input. The period-refinement scan
+steps use σ_f · κ̂_c (a preliminary circular-fit estimate), so the refinement is invariant too.
+Exercise: show that E[χ²_resid] = κ²(N − p) for a linear model with p fitted parameters, and
+explain why the 3 nonlinear parameters are only approximately "worth" one each.

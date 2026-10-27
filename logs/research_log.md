@@ -188,3 +188,30 @@ Local, toy scan law, 300 smoke test stars, **not counted**.
 4. Proposed next step: estimate kappa_hat^2 = (chi2_5 − max Delta chi^2) / (N − 12) from the
    best Keplerian fit and normalise all physics features by it (Delta chi^2 / kappa_hat^2,
    anchor widths × kappa_hat).
+
+## 2026-10-28: noise-level rescaling fixes coverage under misspecified noise
+
+Code `5dee1ff` (`model.noise_rescale`), docs §7. Local, toy scan law, 300 stars per test set,
+training on kappa ~ LogUniform(0.8, 1.5) noise; 1385 steps (kappa-only run: 1376; baseline:
+1387). **Not counted.**
+
+kappa_hat^2 = (chi2_5 − max Delta chi^2)/(N − 12) from the best Keplerian fit; Delta chi^2
+inputs / kappa_hat^2, anchor widths × kappa_hat, log kappa_hat as an input. Tested: tracks the
+true noise scale to 8% (median) at low and high S/N; all other inputs exactly invariant to
+rescaling the reported sigma.
+
+| test set (max HPD coverage error) | baseline | kappa only | kappa + rescale |
+|---|---|---|---|
+| nominal (kappa = 1)            | 3.3 pp  | 3.3 pp  | 2.0 pp |
+| kappa = 1.2                    | 10.7 pp | 13.3 pp | 2.3 pp |
+| kappa = 0.8                    | 14.0 pp | 8.3 pp  | 3.0 pp |
+| kappa from the prior           | 3.0 pp  | 9.7 pp  | 3.7 pp |
+| gaiamock jitter (out of prior) | 7.0 pp  | –       | 2.7 pp |
+| 2% outliers (out of prior)     | 19.7 pp | –       | 3.7 pp |
+| scan harmonics (out of prior)  | 7.0 pp  | –       | 5.0 pp |
+
+- Stars with true noise 1.2–2× sigma: 50% coverage 0.23–0.31 → 0.55–0.56.
+- Period recovery 100% and no wrong periods on every set; C2ST 15/20 (references assume
+  kappa = 1 exactly, so slightly pessimistic; they should marginalise kappa).
+- Outliers are handled only through an overall noise inflation, not an outlier model.
+- OPEN: the kappa range (0.8–1.5) is a placeholder to justify; references need a kappa dimension.
