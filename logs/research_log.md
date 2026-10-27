@@ -157,3 +157,34 @@ docs §5e, check `scripts/diagnostics/check_period_anchor.py`.
   and period refinement (many small float64 ops). Batched: 24.5 ms/star. Must be measured on the
   Kaggle GPU. OPEN: decide whether the 50 ms gate means single-star latency or batched
   throughput, before the counted run.
+
+## 2026-10-27 (later): can coverage error be reduced?
+
+Local, toy scan law, 300 smoke test stars, **not counted**.
+
+1. **Nominal coverage error (2.3–4.0 pp across runs) is consistent with zero.** Every run's 95%
+   bootstrap interval contains 0.50 / 0.68 / 0.90; ±5 pp is the resolution of 300 stars.
+   The 2,000-star Kaggle test set resolves ±2 pp.
+2. **Misspecified noise is a model problem, not a network problem.** Exact posteriors computed
+   with the reported sigma when the true noise is 1.2 sigma (150 stars,
+   `scripts/diagnostics/exact_coverage_misspec.py`): u_P coverage 0.43 / 0.60 / 0.85; network
+   0.46 / 0.64 / 0.93. With correct sigma both are calibrated.
+3. **Training with an unknown noise scale (kappa ~ LogUniform(0.8, 1.5), 1376 steps; the
+   baseline had 1387):** did not help yet.
+
+| test set | baseline max cov. err. | kappa-trained |
+|---|---|---|
+| nominal (kappa = 1)        | 3.3 pp  | 3.3 pp  |
+| kappa = 1.2                | 10.7 pp | 13.3 pp |
+| kappa = 0.8                | 14.0 pp | 8.3 pp  |
+| kappa from the prior       | 3.0 pp  | 9.7 pp  |
+
+   Both models under-cover badly for stars with true kappa > 1.2 (50% level: 0.23–0.31), even
+   at S/N < 6: extra noise produces periodogram peaks that look significant against the
+   reported sigma, and the network anchors on them. The kappa-trained network has not learned
+   to rescale the Delta chi^2 features by the noise level.
+   C2ST (nominal) 16/20 for both. Single-star CPU timing differed 2x (95 vs 49 ms) between
+   identical architectures, so local timing is too noisy to judge the 50 ms gate.
+4. Proposed next step: estimate kappa_hat^2 = (chi2_5 − max Delta chi^2) / (N − 12) from the
+   best Keplerian fit and normalise all physics features by it (Delta chi^2 / kappa_hat^2,
+   anchor widths × kappa_hat).
