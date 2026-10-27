@@ -173,3 +173,21 @@ def test_rescaled_features_invariant_to_reported_sigma():
     torch.testing.assert_close(emb_a, emb_b, atol=2e-4, rtol=1e-4)
     for key in ("a", "log_tau", "m0", "log_tau_m0", "ecc_feat"):
         torch.testing.assert_close(anc_a[key], anc_b[key], atol=2e-4, rtol=1e-4)
+
+
+def test_joint_refine_improves_fit_and_gives_positive_covariance():
+    """Experimental (off by default): Newton must not lower Delta chi^2; covariance PD."""
+    from gdr4.nn.orbit_profile import joint_refine
+
+    prior, sim = _sim(n=200, seed=11)
+    sel = np.flatnonzero((sim["snr_a0"] > 30) & (sim["ecc"] > 0.3))[:6]
+    batch = to_torch_batch({k: v[sel] for k, v in sim.items()}, prior)
+    f0 = torch.tensor(1.0 / sim["period_d"][sel])[:, None] * (1 + 1e-4)
+    e0 = torch.tensor(sim["ecc"][sel])[:, None] - 0.02
+    m0 = torch.tensor(sim["mean_anom0_rad"][sel])[:, None] + 0.02
+    start_gain = orbit_chi2_gain(batch, 1.0 / f0, e0, m0)
+    sig = torch.tensor([[1e-6, 0.01, 0.01]], dtype=torch.float64).expand(len(sel), 1, 3)
+    jr = joint_refine(batch, f0, e0, m0, sig, prior.ecc_max)
+    assert torch.all(jr["gain"] >= start_gain - 1e-6)
+    assert jr["pd"].all()
+    assert torch.all(torch.linalg.eigvalsh(jr["cov_x"]) > 0)

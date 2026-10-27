@@ -264,3 +264,35 @@ Noise-rescaled model (1385 steps) vs kappa-marginalised references, nominal smok
 - Proposed fix: joint Newton refinement of (P, e, M0) on the Keplerian Delta chi^2 with the full
   Laplace covariance (converged anchors, marginal widths including correlations, conditional
   anchors for e | P and M0 | P, e), plus anchor-reliability inputs.
+
+## 2026-10-28 (later): joint Newton refinement — does not fix the anchors
+
+Code: `joint_refine`, `profile_anchors(joint=..., regrid=..., n_starts=...)` in
+`nn/orbit_profile.py` (experimental, **off by default**; no config uses it). Diagnostics:
+`scripts/diagnostics/anchor_reliability.py`, `wrong_basin.py`. No network training was run.
+
+- Joint Newton (3-D, finite-difference Hessian, trust region, Laplace covariance) converges
+  (Newton step ~0) and its widths match the exact posterior widths at S/N ≥ 11 (ratio mostly
+  0.9–1.3). But anchor reliability did not improve (S/N > 30: truth within 2 widths 67% e /
+  57% M0 vs 78% / 71% before).
+- Root cause found: the refinement often converges to the **wrong local maximum**. At S/N ≥ 10
+  the truth fits better than our best fit (Delta chi^2 deficit > 2) for 16% of stars with the
+  current coordinate ascent and 30% with joint Newton; typical: e underestimated (0.24 vs 0.48),
+  M0 off by ~0.2 rad. The coarse (8 × 16) (e, M0) grid at the circular period lands on a broad,
+  lower ridge; Newton then converges faithfully inside that basin. kappa_hat is inflated
+  (1.13–1.19) on these stars, so the noise rescaling also widens them.
+- Search variants (119 stars at S/N ≥ 10; CPU time for all):
+
+| search | wrong basin | S/N ≥ 30 | time |
+|---|---|---|---|
+| current, 8 × 16 grid            | 16% | 12/52 | 1.9 s |
+| joint Newton                    | 30% | –     | 2.6 s |
+| joint + re-grid 8 × 16          | 17% | 15/52 | 4.0 s |
+| joint + re-grid 16 × 32         | 12% | 12/52 | 11.6 s |
+| joint + re-grid 16 × 64         | 8%  | 8/52  | 22 s |
+| joint + re-grid 24 × 96, 3 starts | 8% | 8/52 | 53 s |
+
+- The remaining 8% are cases where the period anchor itself is in the wrong basin, which no
+  (e, M0) search at that period can fix; this needs a global (P, e, M0) search.
+- Decision pending (mine): stay with the current search; a finer grid (~10× CPU); a global
+  search (Phase 2); or an exact importance-sampling correction for high-S/N stars.
