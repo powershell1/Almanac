@@ -19,8 +19,10 @@ from gdr4.utils import load_config
 cfg = load_config("configs/smoke_local_check.yaml")
 prior = Prior.from_config(cfg["prior"])
 CKPT = sys.argv[1] if len(sys.argv) > 1 else "runs_local/checkpoints/local_check/best.pt"
+REF = sys.argv[2] if len(sys.argv) > 2 else "runs_local/shards/smoke/reference"
+TEST = sys.argv[3] if len(sys.argv) > 3 else "nominal"
 model, _ = load_model(CKPT)
-sh = read_shard("runs_local/shards/smoke/test/nominal", 0)
+sh = read_shard(f"runs_local/shards/smoke/test/{TEST}", 0)
 b = to_torch_batch(gather_padded(sh, np.arange(20)), prior)
 torch.manual_seed(0)
 v_npe = model.sample(b, 2000).numpy()  # (2000, 20, 3)
@@ -39,7 +41,7 @@ print(
 rng = np.random.default_rng(0)
 rows = []
 for i in np.argsort(snr):
-    z = np.load(f"runs_local/shards/smoke/reference/star_{i:05d}.npz")
+    z = np.load(f"{REF}/star_{i:05d}.npz")
     ref = z["v"][rng.choice(len(z["v"]), 2000, replace=False), :3]
     npe = v_npe[:, i]
     w = [

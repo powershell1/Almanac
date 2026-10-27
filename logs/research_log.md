@@ -239,3 +239,28 @@ lowest ESS 2433; **not counted**):
   quoted against the reported sigma, so these are effectively fainter. High-S/N stars fail on
   both sets, as before. Cannot separate under-training (1385 steps) from a real weakness here.
 - If scale_prior becomes the gating set (OPEN), C2ST currently fails it locally.
+
+## 2026-10-28 (later): why the high-S/N stars still fail C2ST
+
+Noise-rescaled model (1385 steps) vs kappa-marginalised references, nominal smoke set
+(`scripts/diagnostics/diag_c2st.py`, `diag_high_snr.py`; **not counted**).
+
+- Failing parameters at S/N ≥ 10: u_e 1.6–3.9× too wide (per-dim C2ST 0.59–0.80) and M0
+  1.4–12× (0.53–0.75); the period core is fine (0.51–0.56) except stars 10 and 9.
+- On these stars the e and M0 anchors are right (offsets ≤ 2.2 / 1.7 exact sd; widths 0.56–0.96
+  / 0.75–1.17 of the exact sd) and the phase head puts 98–100% weight on anchored components,
+  yet its phase is 1.5–19× too wide even at fixed period. Not a correlation effect: exact
+  correlations are mostly |rho| ≤ 0.3 and conditional widths are still 1.7–21× too wide.
+- Across all 300 test stars the anchors are over-confident: at S/N > 10 the truth is within 2
+  anchor widths for only 74–87% (M0) and 79% (e) instead of 95%; robust spread 1.1–1.8 widths.
+  The widths are one-parameter-at-a-time Fisher widths, which ignore correlations.
+- At S/N > 30, no anchor is within 5 widths of the truth for 10% of stars: near-misses on the
+  right peak (193 vs 194 d at 10 widths, 93 d at 7, 363 vs 362 d at 6) where coordinate ascent
+  has not converged for eccentric orbits; long periods near the baseline (1525 vs 1608 d,
+  1639 vs 1733 d); one P = 1867 d star with no periodogram peak near the truth.
+  Re-ranking anchors by their Keplerian Delta chi^2 does not help.
+- Interpretation: the network cannot tell reliable from unreliable anchors, so the likelihood
+  objective makes it widen everywhere.
+- Proposed fix: joint Newton refinement of (P, e, M0) on the Keplerian Delta chi^2 with the full
+  Laplace covariance (converged anchors, marginal widths including correlations, conditional
+  anchors for e | P and M0 | P, e), plus anchor-reliability inputs.
