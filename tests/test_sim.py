@@ -154,3 +154,18 @@ def test_shards_resumable(tmp_path, prior, scan):
         np.testing.assert_array_equal(back[k], padded[k])
     (shard_path(tmp_path, 2) / "_COMPLETE").unlink()
     assert not is_complete(tmp_path, 2)
+
+
+def test_scale_prior_noise_varies_per_star(prior, scan):
+    rng = np.random.default_rng(8)
+    batch = simulate_batch(rng, 400, prior, scan, get_noise_model("scale_prior"))
+    ratios = []
+    for i in range(400):
+        s = star_view(batch, i)
+        tp = t_peri_from_mean_anomaly(s["mean_anom0_rad"], s["period_d"])
+        m = design_matrix(s["t_d"], s["psi_rad"], s["plx_factor"], s["period_d"], s["ecc"], tp)
+        ratios.append(np.std((s["w_mas"] - m @ s["theta_lin"]) / s["sigma_mas"]))
+    log_r = np.log(np.array(ratios))
+    # log kappa ~ U(log 0.8, log 1.5): mean 0.0912, sd 0.1815 (plus a little sampling noise)
+    assert abs(log_r.mean() - 0.5 * np.log(0.8 * 1.5)) < 0.03
+    assert 0.16 < log_r.std() < 0.24

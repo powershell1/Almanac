@@ -278,3 +278,32 @@ the start and at the end of the data.)
   random reference points, this being Uniform(0, 1) is necessary and sufficient for calibration
   (read their Theorem before quoting this in the paper).
 - **SBC ranks** (Talts et al. 2018) for P and e separately.
+
+---
+
+## 7. Unknown noise scale (`noise_model: scale_prior`, proposed)
+
+**Problem.** If the reported per-transit errors σ are too small by a factor κ, every analysis
+that trusts σ, including the exact posterior, is over-confident. Measured locally
+(`scripts/diagnostics/exact_coverage_misspec.py`, 150 stars, true noise 1.2σ): exact posterior
+u_P coverage 0.43 / 0.60 / 0.85 at 50/68/90%; the network matches it (0.46 / 0.64 / 0.93).
+So this is not a network error; the noise model is wrong.
+
+**Rough size of the effect.** For a likelihood-dominated, Gaussian-like posterior of width s,
+the estimate scatters with width κs, so the central α interval covers
+P(|N(0,1)| < z_α / κ). For κ = 1.2: 0.43 / 0.59 / 0.83 instead of 0.50 / 0.68 / 0.90,
+which is close to the measured values. Exercise: derive this, then do it for a 3-D joint region.
+
+**Model change.** Treat κ as an unknown per-star parameter: true noise = κ σ with
+κ ~ LogUniform(κ_min, κ_max), and train on simulations that draw it. NPE then learns the
+posterior marginalised over κ; with ~100 transits κ itself is constrained to roughly
+1/√(2N) ≈ 7% by the residual scatter, so the posterior widens only when the data say the
+errors are under-estimated. This is the astrometric analogue of an RV "jitter" term.
+
+**Consequences to decide on.**
+- The reference sampler must also marginalise κ (one more dimension; the likelihood at fixed
+  κ is still analytic with σ → κσ), or C2ST compares against the wrong posterior.
+- Calibration is then guaranteed on test stars drawn from the κ prior. Fixed-κ test sets
+  (κ = 0.8, 1, 1.2) become conditional checks; values outside the prior range stay
+  genuine misspecification tests.
+- The κ range is a placeholder (0.8–1.5); justify it from Gaia error-inflation studies.

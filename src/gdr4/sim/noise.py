@@ -55,6 +55,9 @@ class NoiseModel:
     ----------
     sigma_scale : float
         True per-transit std = sigma_scale * reported sigma (1 = correct error bars).
+    sigma_scale_range : (float, float) or None
+        If set, each star gets its own sigma_scale ~ LogUniform(range) instead (an unknown noise
+        scale, like an RV jitter term; docs/derivations.md, section 7). Multiplies sigma_scale.
     jitter_max_mas : float
         Extra white noise with per-star std ~ U(0, jitter_max_mas) (gaiamock uses 0.04 for G<13).
     outlier_frac, outlier_scale : float
@@ -71,11 +74,16 @@ class NoiseModel:
     outlier_frac: float = 0.0
     outlier_scale: float = 10.0
     harmonic_amp_mas: dict[int, float] = field(default_factory=dict)
+    sigma_scale_range: tuple[float, float] | None = None
 
     def apply(self, rng, w_clean_mas, sigma_mas, psi_rad, mask):
         """Return noisy abscissae, shape like ``w_clean_mas`` (n_star, n_transit)."""
         n_star, n_tr = w_clean_mas.shape
-        noise = self.sigma_scale * sigma_mas * rng.standard_normal((n_star, n_tr))
+        scale = self.sigma_scale
+        if self.sigma_scale_range is not None:
+            lo, hi = np.log(self.sigma_scale_range[0]), np.log(self.sigma_scale_range[1])
+            scale = scale * np.exp(rng.uniform(lo, hi, (n_star, 1)))
+        noise = scale * sigma_mas * rng.standard_normal((n_star, n_tr))
         if self.jitter_max_mas > 0:
             jit = rng.uniform(0.0, self.jitter_max_mas, (n_star, 1))
             noise += jit * rng.standard_normal((n_star, n_tr))
@@ -103,6 +111,9 @@ NOISE_MODELS: dict[str, NoiseModel] = {
         NoiseModel("sigma_deflated_0.8", sigma_scale=0.8),
         NoiseModel("outliers_2pct", outlier_frac=0.02, outlier_scale=10.0),
         NoiseModel("scan_harmonics", harmonic_amp_mas={3: 0.02, 5: 0.01, 7: 0.005}),
+        # Unknown per-star noise scale for training. OPEN: the range is a placeholder; justify
+        # it (e.g. from DR3/DR4 error-inflation studies) before a counted run.
+        NoiseModel("scale_prior", sigma_scale_range=(0.8, 1.5)),
     )
 }
 # TODO(Phase 2): photocentre dilution / partially resolved luminous companions. In the
