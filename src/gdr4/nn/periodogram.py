@@ -173,7 +173,11 @@ def peak_features(
 
 @torch.no_grad()
 def anchors_from_peaks(
-    peaks: dict, n: int, target_period_d: tuple[float, float], freq: torch.Tensor | None = None
+    peaks: dict,
+    n: int,
+    target_period_d: tuple[float, float],
+    freq: torch.Tensor | None = None,
+    log_kappa: torch.Tensor | None = None,
 ) -> dict:
     """Anchors for the period posterior from the ``n`` highest peaks (see docs, section 5c).
 
@@ -184,7 +188,8 @@ def anchors_from_peaks(
     Peaks outside the prior period range or without negative curvature are invalid; invalid
     entries are set to a = 0, log_tau = 0 so that downstream arithmetic stays finite.
     ``freq`` (B, n) overrides the anchor positions (e.g. Keplerian re-refined frequencies); the
-    width still comes from the circular-periodogram curvature.
+    width still comes from the circular-periodogram curvature. ``log_kappa`` (B,) widens every
+    width by the estimated noise scale (Fisher widths scale linearly with the noise).
     """
     f = peaks["freq"][:, :n] if freq is None else freq
     d2 = peaks["d2"][:, :n]
@@ -195,7 +200,10 @@ def anchors_from_peaks(
     a = torch.special.ndtri(frac)
     phi = torch.exp(-0.5 * a * a) / math.sqrt(2 * math.pi)
     sigma_f = torch.sqrt(2.0 / (-d2).clamp_min(1e-300))
-    log_tau = torch.log(sigma_f / (f * (hi - lo) * phi)).clamp(math.log(1e-7), math.log(3.0))
+    log_tau = torch.log(sigma_f / (f * (hi - lo) * phi))
+    if log_kappa is not None:
+        log_tau = log_tau + log_kappa.to(log_tau)[:, None]
+    log_tau = log_tau.clamp(math.log(1e-7), math.log(3.0))
     zero = torch.zeros_like(a)
     return {
         "a": torch.where(valid, a, zero).float(),

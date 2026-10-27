@@ -250,11 +250,11 @@ def test_anchored_von_mises_normalised_with_narrow_components():
     assert ((s >= 0) & (s < 2 * math.pi)).all()
 
 
-@pytest.mark.parametrize("refine", [False, True])
-def test_profile_npe_trains_samples_and_ignores_padding(batch_and_prior, refine):
+@pytest.mark.parametrize("refine, rescale", [(False, False), (True, False), (True, True)])
+def test_profile_npe_trains_samples_and_ignores_padding(batch_and_prior, refine, rescale):
     batch, _ = batch_and_prior
     torch.manual_seed(0)
-    model = NPE(**{**PROFILE, "refine_period": refine})
+    model = NPE(**{**PROFILE, "refine_period": refine, "noise_rescale": rescale})
     loss = model(batch, batch["v"])
     loss.backward()
     assert torch.isfinite(loss)
@@ -275,3 +275,8 @@ def test_profile_npe_trains_samples_and_ignores_padding(batch_and_prior, refine)
 def test_refine_period_requires_profile():
     with pytest.raises(ValueError):
         NPE(**{**ANCHORED, "refine_period": True})
+
+
+def test_noise_rescale_requires_profile():
+    with pytest.raises(ValueError):
+        NPE(**{**ANCHORED, "noise_rescale": True})

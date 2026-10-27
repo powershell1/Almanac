@@ -15,7 +15,7 @@ import torch.nn.functional as F  # noqa: N812
 import zuko
 from torch import nn
 
-from gdr4.nn.orbit_profile import profile_anchors
+from gdr4.nn.orbit_profile import circular_noise_scale, noise_scale_estimate, profile_anchors
 from gdr4.nn.periodogram import (
     N_PEAK_FEATURES,
     analyse_peaks,
@@ -97,12 +97,14 @@ class PeriodogramEncoder(nn.Module):
         ecc_max: float = 0.9,
         profile_grid: tuple[int, int] = (8, 16),
         refine_period: bool = False,
+        noise_rescale: bool = False,
     ):
         super().__init__()
         self.period_range_d = tuple(period_range_d)
         self.n_peaks = n_peaks
         self.n_profile, self.ecc_max, self.profile_grid = n_profile, ecc_max, tuple(profile_grid)
         self.refine_period = refine_period
+        self.noise_rescale = noise_rescale
         self.out_dim = out_dim * (1 + bool(n_peaks) + bool(n_profile))
         self.register_buffer("freqs", frequency_grid(*period_range_d, k), persistent=False)
         self.cnn = nn.Sequential(
@@ -118,7 +120,7 @@ class PeriodogramEncoder(nn.Module):
         self.out = nn.Linear(ch * (k // 8), out_dim)
         if n_peaks:
             self.peaks = nn.Sequential(
-                nn.Linear(n_peaks * N_PEAK_FEATURES, out_dim),
+                nn.Linear(n_peaks * N_PEAK_FEATURES + int(noise_rescale), out_dim),
                 nn.GELU(),
                 nn.Linear(out_dim, out_dim),
             )
@@ -143,29 +145,49 @@ class PeriodogramEncoder(nn.Module):
         return self.map_out(torch.cat([x, top], dim=-1).flatten(1))
 
     def forward(self, batch: dict) -> tuple[torch.Tensor, dict | None]:
-        """Embedding (B, out_dim) and the refined peak analysis (None without peaks)."""
+        """Embedding (B, out_dim) and the refined peak analysis (None without peaks).
+
+        With ``noise_rescale`` every Delta chi^2 the network sees is divided by kappa_hat^2, the
+        noise scale estimated from the best Keplerian fit, and log kappa_hat is an extra input
+        (docs/derivations.md, section 7). Peak and anchor *positions* are unaffected: rescaling
+        Delta chi^2 does not move its maxima.
+        """
         with torch.autocast(device_type=batch["t_d"].device.type, enabled=False):
             pg = circular_periodogram(batch, self.freqs)
-            emb = self.out(self.cnn(torch.log1p(pg).float()[:, None]).flatten(1))
             if not self.n_peaks:
-                return emb, None
+                return self.out(self.cnn(torch.log1p(pg).float()[:, None]).flatten(1)), None
             peaks = analyse_peaks(batch, self.freqs, pg, self.n_peaks)
-            pk = features_from_peaks(peaks, self.period_range_d)
-            parts = [emb, self.peaks(pk.flatten(1))]
+            prof = None
             if self.n_profile:
                 period = 1.0 / peaks["freq"][:, : self.n_profile]
                 sigma_f = None
                 if self.refine_period:
                     d2 = peaks["d2"][:, : self.n_profile]
                     step = (self.freqs[1] - self.freqs[0]).to(d2)
-                    sigma_f = torch.where(
-                        d2 < 0, torch.sqrt(2.0 / (-d2).clamp_min(1e-300)), step
-                    ).clamp(max=step)
+                    sigma_f = torch.where(d2 < 0, torch.sqrt(2.0 / (-d2).clamp_min(1e-300)), step)
+                    if self.noise_rescale:  # scan step in units of the noise-corrected width
+                        sigma_f = sigma_f * torch.exp(circular_noise_scale(batch, pg))[:, None]
+                    sigma_f = sigma_f.clamp(max=step)
                 prof = profile_anchors(
                     batch, period, self.ecc_max, *self.profile_grid, sigma_f=sigma_f
                 )
                 peaks["profile"] = prof
-                parts.append(self._embed_maps(prof["map"].float()))
+            scale = torch.ones_like(pg[:, 0])
+            if self.noise_rescale:
+                peaks["log_kappa"] = noise_scale_estimate(batch, prof)
+                scale = torch.exp(-2.0 * peaks["log_kappa"])
+            emb = self.out(self.cnn(torch.log1p(pg * scale[:, None]).float()[:, None]).flatten(1))
+            scaled = dict(peaks, height=peaks["height"] * scale[:, None])
+            pk = features_from_peaks(scaled, self.period_range_d).flatten(1)
+            if self.noise_rescale:
+                pk = torch.cat([pk, peaks["log_kappa"].float()[:, None]], dim=-1)
+            parts = [emb, self.peaks(pk)]
+            if prof is not None:
+                if self.noise_rescale:
+                    maps = torch.log1p(prof["gain_grid"] * scale[:, None, None, None])
+                else:
+                    maps = prof["map"]
+                parts.append(self._embed_maps(maps.float()))
             return torch.cat(parts, dim=-1), peaks
 
 
@@ -184,6 +206,7 @@ class TransitEncoder(nn.Module):
         n_profile: int = 0,
         ecc_max: float = 0.9,
         refine_period: bool = False,
+        noise_rescale: bool = False,
     ):
         super().__init__()
         self.variant = variant
@@ -196,6 +219,7 @@ class TransitEncoder(nn.Module):
                 n_profile=n_profile,
                 ecc_max=ecc_max,
                 refine_period=refine_period,
+                noise_rescale=noise_rescale,
             )
             if pgram_k
             else None
@@ -427,19 +451,25 @@ class AnchoredPeriodHead(nn.Module):
 
 
 @torch.no_grad()
-def profile_to_anchors(prof: dict, period_valid: torch.Tensor, ecc_max: float) -> dict:
+def profile_to_anchors(
+    prof: dict, period_valid: torch.Tensor, ecc_max: float, log_kappa: torch.Tensor | None = None
+) -> dict:
     """Profile results -> M0 anchors (position, log width, validity) and u_e features.
 
     u_e = probit(e / e_max), so a width sigma_e in e becomes sigma_e / (e_max phi(u_e)).
-    M0 anchors need a curved profile and a width below 1 rad to be useful.
+    M0 anchors need a curved profile and a width below 1 rad to be useful. ``log_kappa`` (B,)
+    widens both widths by the estimated noise scale.
     """
-    sig_m = prof["sigma_m0"]
+    sig_m, sig_e = prof["sigma_m0"], prof["sigma_e"]
+    if log_kappa is not None:
+        kap = torch.exp(log_kappa).to(sig_m)[:, None]
+        sig_m, sig_e = sig_m * kap, sig_e * kap
     valid_m0 = period_valid & torch.isfinite(sig_m) & (sig_m < 1.0)
     lt_m = torch.log(sig_m.clamp(1e-7, 1.0))
     u_e = torch.special.ndtri((prof["ecc"] / ecc_max).clamp(1e-6, 1 - 1e-6))
     phi = torch.exp(-0.5 * u_e * u_e) / math.sqrt(2 * math.pi)
-    lt_e = torch.log((prof["sigma_e"] / (ecc_max * phi)).clamp(1e-6, 10.0))
-    valid_e = period_valid & torch.isfinite(prof["sigma_e"])
+    lt_e = torch.log((sig_e / (ecc_max * phi)).clamp(1e-6, 10.0))
+    valid_e = period_valid & torch.isfinite(sig_e)
     zero = torch.zeros_like(u_e)
     ecc_feat = torch.stack(
         [
@@ -481,6 +511,7 @@ class NPE(nn.Module):
         profile: bool = False,
         target_ecc_max: float = 0.9,
         refine_period: bool = False,
+        noise_rescale: bool = False,
     ):
         super().__init__()
         if pgram_peaks and not pgram_k:
@@ -493,7 +524,10 @@ class NPE(nn.Module):
             raise ValueError("profile=True needs head='anchored'")
         if refine_period and not profile:
             raise ValueError("refine_period=True needs profile=True")
+        if noise_rescale and not profile:
+            raise ValueError("noise_rescale=True needs profile=True")
         self.refine_period = refine_period
+        self.noise_rescale = noise_rescale
         self.head = head
         self.n_anchor = n_anchor
         self.target_period_d = tuple(target_period_d)
@@ -519,6 +553,7 @@ class NPE(nn.Module):
             profile=profile,
             target_ecc_max=float(target_ecc_max),
             refine_period=refine_period,
+            noise_rescale=noise_rescale,
         )
         self.encoder = TransitEncoder(
             features,
@@ -533,6 +568,7 @@ class NPE(nn.Module):
             n_anchor if profile else 0,
             float(target_ecc_max),
             refine_period,
+            noise_rescale,
         )
         if head == "nsf":  # joint 2-D spline flow over (u_P, u_e)
             self.flow = zuko.flows.NSF(
@@ -576,10 +612,15 @@ class NPE(nn.Module):
             freq = None
             if self.refine_period:  # Keplerian re-refined anchor positions (docs, section 5e)
                 freq = 1.0 / peaks["profile"]["period"]
-            anchors = anchors_from_peaks(peaks, self.n_anchor, self.target_period_d, freq)
+            log_k = peaks.get("log_kappa") if self.noise_rescale else None
+            anchors = anchors_from_peaks(
+                peaks, self.n_anchor, self.target_period_d, freq, log_kappa=log_k
+            )
             if self.profile:
                 anchors.update(
-                    profile_to_anchors(peaks["profile"], anchors["valid"], self.target_ecc_max)
+                    profile_to_anchors(
+                        peaks["profile"], anchors["valid"], self.target_ecc_max, log_kappa=log_k
+                    )
                 )
         return ctx.float(), anchors
 

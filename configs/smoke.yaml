@@ -60,6 +60,7 @@ model:
   profile: true
   target_ecc_max: 0.9      # must equal prior.ecc_max
   refine_period: true
+  noise_rescale: true
 
 training:
   batch_size: 128

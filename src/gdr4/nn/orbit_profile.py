@@ -144,7 +144,9 @@ def profile_anchors(
 
     Returns
     -------
-    dict with ``map`` (B, K, n_e, n_m) log(1 + Delta chi^2) on the grid at the input period;
+    dict with ``map`` (B, K, n_e, n_m) log(1 + Delta chi^2) on the grid at the input period
+    (``gain_grid``: the same without the log); ``gain_best`` (B, K), Delta chi^2 at the refined
+    optimum;
     refined ``ecc``, ``m0`` and ``period`` (B, K); Fisher widths ``sigma_e``, ``sigma_m0``
     (B, K) (inf where the profile is not curved, e.g. M0 for a near-circular orbit).
     """
@@ -173,11 +175,46 @@ def profile_anchors(
     inf = torch.full_like(d2e, torch.inf)
     sig_e = torch.where(d2e < 0, torch.sqrt(2.0 / (-d2e).clamp_min(1e-300)), inf)
     sig_m = torch.where(d2m < 0, torch.sqrt(2.0 / (-d2m).clamp_min(1e-300)), inf)
+    best = _gain(batch, period[..., None], e_c[..., None], m_c[..., None])[..., 0]
     return {
         "map": torch.log1p(gain),
+        "gain_grid": gain,
+        "gain_best": best,
         "ecc": e_c,
         "m0": m_c,
         "period": period,
         "sigma_e": sig_e,
         "sigma_m0": sig_m,
     }
+
+
+@torch.no_grad()
+def circular_noise_scale(batch: dict, pg: torch.Tensor, lo: float = 1e-4, hi: float = 1e8):
+    """Preliminary log kappa_hat (B,) from the best *circular* orbit: (chi^2_5 - max pg)/(N - 9).
+
+    Used only to set noise-invariant step sizes before the Keplerian refinement, so the clamp
+    is loose (a circular fit to a bright eccentric orbit leaves a large residual).
+    """
+    _, _, _, w, r, _, _ = single_star_terms(batch)
+    chi2_5 = (w * r * r).sum(-1)
+    dof = (batch["mask"].sum(-1).to(torch.float64) - 9.0).clamp_min(1.0)
+    resid = (chi2_5 - pg.amax(-1).to(torch.float64)).clamp_min(0.0)
+    return 0.5 * torch.log((resid / dof).clamp(lo, hi))
+
+
+@torch.no_grad()
+def noise_scale_estimate(batch: dict, prof: dict, lo: float = 0.25, hi: float = 9.0):
+    """log kappa_hat (B,), the noise scale relative to the reported sigma.
+
+    kappa_hat^2 = (chi^2_5 - max_k Delta chi^2_k) / (N - 12): the residual chi^2 per degree of
+    freedom after the best Keplerian fit among the anchors (5 + 4 linear + 3 nonlinear
+    parameters), clamped to [lo, hi]. The orbit is removed first, so this is valid at low and
+    high S/N alike (docs/derivations.md, section 7).
+    """
+    # chi^2_5 from the same float64 residuals and weights as Delta chi^2, so the difference
+    # does not suffer from float32 rounding of a stored chi^2 at high S/N.
+    _, _, _, w, r, _, _ = single_star_terms(batch)
+    chi2_5 = (w * r * r).sum(-1)
+    dof = (batch["mask"].sum(-1).to(torch.float64) - 12.0).clamp_min(1.0)
+    resid = (chi2_5 - prof["gain_best"].amax(-1)).clamp_min(0.0)
+    return 0.5 * torch.log((resid / dof).clamp(lo, hi))

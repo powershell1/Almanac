@@ -83,3 +83,93 @@ def test_keplerian_refinement_beats_circular_peak_for_eccentric_orbits():
     err_k = np.abs(1.0 / prof["period"][:, 0].numpy() - f_true) / sig_f[:, 0].numpy()
     assert np.median(err_k) < np.median(err_c)
     assert np.median(err_k) < 3.0  # within a few Fisher widths of the truth
+
+
+def _true_noise_scale(sim, i):
+    s = star_view(sim, i)
+    tp = t_peri_from_mean_anomaly(s["mean_anom0_rad"], s["period_d"])
+    m = design_matrix(s["t_d"], s["psi_rad"], s["plx_factor"], s["period_d"], s["ecc"], tp)
+    return np.std((s["w_mas"] - m @ s["theta_lin"]) / s["sigma_mas"])
+
+
+def test_noise_scale_estimate_tracks_true_noise():
+    from gdr4.nn.model import NPE
+
+    prior = Prior.from_config(load_config(REPO_ROOT / "configs" / "smoke.yaml")["prior"])
+    sim = simulate_batch(
+        np.random.default_rng(5), 120, prior, build_cache_toy_nsl(2), get_noise_model("scale_prior")
+    )
+    batch = to_torch_batch(sim, prior)
+    torch.manual_seed(0)
+    model = NPE(
+        d_model=32,
+        n_layers=1,
+        n_heads=2,
+        n_freq=8,
+        ctx_dim=32,
+        flow_transforms=2,
+        flow_hidden=(32, 32),
+        flow_bins=4,
+        n_vm=3,
+        pgram_k=256,
+        pgram_peaks=4,
+        head="anchored",
+        n_anchor=3,
+        profile=True,
+        refine_period=True,
+        noise_rescale=True,
+    )
+    with torch.no_grad():
+        _, peaks = model.encoder(batch)
+    est = np.exp(peaks["log_kappa"].numpy())
+    true = np.array([_true_noise_scale(sim, i) for i in range(120)])
+    hi = sim["snr_a0"] > 6
+    for sel in (hi, ~hi):  # valid at high and low S/N
+        assert np.median(np.abs(np.log(est[sel] / true[sel]))) < 0.08
+    assert np.corrcoef(est, true)[0, 1] > 0.8
+
+
+def test_rescaled_features_invariant_to_reported_sigma():
+    """Multiplying the reported sigma by c must not change what the network is given."""
+    from gdr4.nn.model import NPE
+
+    prior, sim = _sim(n=12, seed=7)
+    batch = to_torch_batch(sim, prior)
+    other = dict(batch)
+    c = 1.3
+    other["sigma_mas"] = batch["sigma_mas"] * c
+    other["chi2_5p"] = batch["chi2_5p"] / c**2  # (not used by the estimate any more)
+    torch.manual_seed(0)
+    model = NPE(
+        d_model=32,
+        n_layers=1,
+        n_heads=2,
+        n_freq=8,
+        ctx_dim=32,
+        flow_transforms=2,
+        flow_hidden=(32, 32),
+        flow_bins=4,
+        n_vm=3,
+        pgram_k=256,
+        pgram_peaks=4,
+        head="anchored",
+        n_anchor=3,
+        profile=True,
+        refine_period=True,
+        noise_rescale=True,
+    ).eval()
+    with torch.no_grad():
+        # log kappa_hat is deliberately an input (it says how far the error bars are off), so it
+        # is the one input that must change; switch it off to test everything else.
+        model.encoder.pgram.peaks[0].weight[:, -1] = 0.0
+        emb_a, pk_a = model.encoder.pgram(batch)
+        emb_b, pk_b = model.encoder.pgram(other)
+        _, anc_a = model.context(batch)
+        _, anc_b = model.context(other)
+    # sigma -> c sigma scales chi^2 by 1/c^2, so kappa_hat -> kappa_hat / c
+    np.testing.assert_allclose(
+        pk_a["log_kappa"].numpy() - np.log(c), pk_b["log_kappa"].numpy(), atol=1e-5
+    )
+    torch.testing.assert_close(emb_a, emb_b, atol=2e-4, rtol=1e-4)
+    for key in ("a", "log_tau", "m0", "log_tau_m0", "ecc_feat"):
+        torch.testing.assert_close(anc_a[key], anc_b[key], atol=2e-4, rtol=1e-4)

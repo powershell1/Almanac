@@ -66,6 +66,7 @@ model:
   profile: true            # (e, M0) profile maps + M0 anchors at the anchor periods
   target_ecc_max: 0.9      # must equal prior.ecc_max
   refine_period: true      # re-centre period anchors with the exact Keplerian fit
+  noise_rescale: true      # divide Delta chi^2 inputs by kappa_hat^2, widen anchors by kappa_hat
 
 training:
   batch_size: 512
