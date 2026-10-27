@@ -238,6 +238,35 @@ within 0.05 of the truth for bright eccentric stars; the anchored phase density 
 
 Exercise: why is M0 undefined for a circular orbit, and what does that do to the curvature?
 
+## 5e. Keplerian re-refinement of the period anchor (`model.refine_period: true`)
+
+**Problem.** The anchor of §5c is the peak of the *circular* periodogram. For an eccentric orbit
+the best circular period is slightly shifted from the true one. At low S/N that shift is tiny
+compared with the posterior width; at S/N 30–100 it was up to 19 posterior widths (star 9 of
+the local reference set), and C2ST failed there.
+
+**Fix.** Maximise the exact Keplerian Δχ²(P, e, M0) of §5d by coordinate ascent, starting from
+the circular period:
+
+1. (e, M0) at the circular period (grid + two 3 × 3 refinements, §5d);
+2. frequency at fixed (e, M0): evaluate on f_c + 2σ_f·j for j = −12..12 (±24 circular Fisher
+   widths σ_f), take the best, then a 3-point parabola with step σ_f/2;
+3. (e, M0) again at the new period (3 × 3 refinements at ¼ and 1/16 of the grid step);
+4. frequency once more (parabola, step σ_f/8).
+
+The anchor position a_k becomes Φ⁻¹ of the refined period's fraction of the log-period range;
+the anchor width τ_k is still the circular Fisher width (it matched the exact widths well).
+Because M0 is the mean anomaly at J2017.5, close to the middle of the DR4 baseline, P and M0
+are only weakly correlated, which is why alternating between them converges quickly.
+
+Check (`scripts/diagnostics/check_period_anchor.py`): anchor offsets from the exact posterior
+centre fell from +19.0 / −6.0 / +5.5 to +1.8 / −0.8 / +0.5 posterior widths for the three worst
+stars; all stars with S/N ≥ 11 are within 1.8 widths.
+
+Exercise: why does choosing the reference epoch near the middle of the baseline reduce the
+P–M0 correlation? (Hint: write M(t) = M0 + 2πt/P and ask how an error in P moves the phase at
+the start and at the end of the data.)
+
 ## 6. Calibration metrics (`eval/calibration.py`)
 
 - **HPD coverage (expected coverage).** For each test star, the credibility level of the true
