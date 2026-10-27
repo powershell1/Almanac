@@ -29,14 +29,16 @@ simulation:
   n_train: 2000000
   shard_size: 50000        # 40 shards, ~125 MB each (ragged storage)
   drop_frac: 0.1           # gaiamock drops a random 10% of transits
-  noise_model: nominal     # training noise = model A
+  noise_model: scale_prior # training noise: unknown per-star noise scale (docs §7; range is OPEN)
   batch_size: 5000
 
 test_set:
   seeds_file: configs/test_seeds.yaml
   # Same stars, different noise realisations: nominal is the gate; the rest are the
-  # misspecification suite (reported, not gated in Phase 1).
-  noise_models: [nominal, gaiamock_jitter, sigma_inflated_1.2, sigma_deflated_0.8,
+  # misspecification suite (reported, not gated in Phase 1). With scale_prior training the set
+  # that is calibrated by construction is scale_prior; nominal (kappa = 1) is a conditional
+  # check. OPEN: confirm which set gates before the first counted run.
+  noise_models: [nominal, scale_prior, gaiamock_jitter, sigma_inflated_1.2, sigma_deflated_0.8,
                  outliers_2pct, scan_harmonics]
 
 reference:
