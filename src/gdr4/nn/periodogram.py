@@ -172,7 +172,9 @@ def peak_features(
 
 
 @torch.no_grad()
-def anchors_from_peaks(peaks: dict, n: int, target_period_d: tuple[float, float]) -> dict:
+def anchors_from_peaks(
+    peaks: dict, n: int, target_period_d: tuple[float, float], freq: torch.Tensor | None = None
+) -> dict:
     """Anchors for the period posterior from the ``n`` highest peaks (see docs, section 5c).
 
     For each peak: its position in the flow's target coordinate
@@ -181,8 +183,10 @@ def anchors_from_peaks(peaks: dict, n: int, target_period_d: tuple[float, float]
     ``sigma_f = sqrt(2 / -d2)`` (Delta chi^2 = -2 Delta log L, so d2 log L / df2 = d2 / 2).
     Peaks outside the prior period range or without negative curvature are invalid; invalid
     entries are set to a = 0, log_tau = 0 so that downstream arithmetic stays finite.
+    ``freq`` (B, n) overrides the anchor positions (e.g. Keplerian re-refined frequencies); the
+    width still comes from the circular-periodogram curvature.
     """
-    f = peaks["freq"][:, :n]
+    f = peaks["freq"][:, :n] if freq is None else freq
     d2 = peaks["d2"][:, :n]
     lo, hi = math.log(target_period_d[0]), math.log(target_period_d[1])
     frac = (-torch.log(f) - lo) / (hi - lo)

@@ -65,6 +65,7 @@ model:
   target_period_d: [30, 2000]   # must equal prior.period_d
   profile: true            # (e, M0) profile maps + M0 anchors at the anchor periods
   target_ecc_max: 0.9      # must equal prior.ecc_max
+  refine_period: true      # re-centre period anchors with the exact Keplerian fit
 
 training:
   batch_size: 512

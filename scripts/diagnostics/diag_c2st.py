@@ -3,6 +3,8 @@ runs_local/ (toy scanning law, smoke_local_check config); paths are hard-coded o
 Run from the repo root: python scripts/diagnostics/diag_c2st.py
 """
 
+import sys
+
 import numpy as np
 import torch
 
@@ -16,8 +18,6 @@ from gdr4.utils import load_config
 
 cfg = load_config("configs/smoke_local_check.yaml")
 prior = Prior.from_config(cfg["prior"])
-import sys
-
 CKPT = sys.argv[1] if len(sys.argv) > 1 else "runs_local/checkpoints/local_check/best.pt"
 model, _ = load_model(CKPT)
 sh = read_shard("runs_local/shards/smoke/test/nominal", 0)

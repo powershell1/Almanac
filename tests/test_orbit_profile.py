@@ -64,3 +64,22 @@ def test_profile_anchor_recovers_e_and_m0_at_true_period():
     d_e = prof["ecc"][:, 0].numpy() - sim["ecc"][sel]
     assert np.median(np.abs(d_m0)) < 0.05 and np.median(np.abs(d_e)) < 0.05
     assert np.all(np.isfinite(prof["sigma_m0"][:, 0].numpy()))
+
+
+def test_keplerian_refinement_beats_circular_peak_for_eccentric_orbits():
+    from gdr4.nn.periodogram import analyse_peaks, circular_periodogram, frequency_grid
+
+    prior, sim = _sim(n=300, seed=21)
+    sel = np.flatnonzero((sim["snr_a0"] > 20) & (sim["ecc"] > 0.5))[:12]
+    assert len(sel) >= 6
+    batch = to_torch_batch({k: v[sel] for k, v in sim.items()}, prior)
+    grid = frequency_grid(20.0, 3000.0, 512)
+    peaks = analyse_peaks(batch, grid, circular_periodogram(batch, grid), 1)
+    f_c = peaks["freq"]
+    sig_f = torch.sqrt(2.0 / (-peaks["d2"]).clamp_min(1e-300))
+    prof = profile_anchors(batch, 1.0 / f_c, prior.ecc_max, sigma_f=sig_f)
+    f_true = 1.0 / sim["period_d"][sel]
+    err_c = np.abs(f_c[:, 0].numpy() - f_true) / sig_f[:, 0].numpy()
+    err_k = np.abs(1.0 / prof["period"][:, 0].numpy() - f_true) / sig_f[:, 0].numpy()
+    assert np.median(err_k) < np.median(err_c)
+    assert np.median(err_k) < 3.0  # within a few Fisher widths of the truth

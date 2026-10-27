@@ -73,49 +73,111 @@ def _parabola(ym, y0, yp):
     return delta, curv
 
 
-@torch.no_grad()
-def profile_anchors(
-    batch: dict, period_d: torch.Tensor, ecc_max: float, n_e: int = 8, n_m: int = 16
-) -> dict:
-    """(e, M0) maps and anchors at each anchor period ``period_d`` (B, K).
+def _gain(batch, period, ecc, m0):
+    """orbit_chi2_gain for parameter tensors of shape (B, K, J) -> (B, K, J)."""
+    b, k, j = period.shape
+    return orbit_chi2_gain(
+        batch,
+        period.reshape(b, -1),
+        ecc.expand(b, k, j).reshape(b, -1),
+        m0.expand(b, k, j).reshape(b, -1),
+    ).reshape(b, k, j)
 
-    Returns
-    -------
-    dict with ``map`` (B, K, n_e, n_m) log(1 + Delta chi^2) on the grid; refined ``ecc``,
-    ``m0`` (B, K); Fisher widths ``sigma_e``, ``sigma_m0`` (B, K) (inf where the profile is not
-    curved, e.g. M0 for a near-circular orbit).
-    """
-    dev, f64 = batch["t_d"].device, torch.float64
-    b, k = period_d.shape
-    e_grid = (torch.arange(n_e, dtype=f64, device=dev) + 0.5) * ecc_max / n_e
-    m_grid = torch.arange(n_m, dtype=f64, device=dev) * TWO_PI / n_m
-    ee, mm = torch.meshgrid(e_grid, m_grid, indexing="ij")
-    p = period_d.to(f64)[..., None].expand(b, k, n_e * n_m).reshape(b, -1)
-    e_all = ee.reshape(-1).repeat(k).expand(b, -1)  # (B, K * n_e * n_m), grid repeated per anchor
-    m_all = mm.reshape(-1).repeat(k).expand(b, -1)
-    gain = orbit_chi2_gain(batch, p, e_all, m_all).reshape(b, k, n_e, n_m)
-    best = gain.reshape(b, k, -1).argmax(-1)
-    e_c, m_c = e_grid[best // n_m], m_grid[best % n_m]
-    de, dm = ecc_max / n_e, TWO_PI / n_m
+
+@torch.no_grad()
+def _refine_e_m0(batch, period, e_c, m_c, de, dm, shrinks, ecc_max):
+    """Local 3 x 3 refinement of (e, M0) at fixed period (B, K); returns e, M0, d2_e, d2_m."""
+    dev, f64 = e_c.device, torch.float64
+    b, k = period.shape
     lo_e, hi_e = 0.005, ecc_max - 0.005
-    for shrink in (1.0, 0.25):  # two rounds of local 3 x 3 refinement
+    off = torch.tensor([-1.0, 0.0, 1.0], dtype=f64, device=dev)
+    for shrink in shrinks:
         e_c = e_c.clamp(lo_e + shrink * de, hi_e - shrink * de)
-        off = torch.tensor([-1.0, 0.0, 1.0], dtype=f64, device=dev)
         ge = (e_c[..., None, None] + shrink * de * off[:, None]).expand(b, k, 3, 3)
         gm = (m_c[..., None, None] + shrink * dm * off[None, :]).expand(b, k, 3, 3)
-        y = orbit_chi2_gain(
-            batch,
-            period_d.to(f64)[..., None].expand(b, k, 9).reshape(b, -1),
-            ge.reshape(b, -1),
-            gm.reshape(b, -1),
+        y = _gain(
+            batch, period[..., None].expand(b, k, 9), ge.reshape(b, k, 9), gm.reshape(b, k, 9)
         ).reshape(b, k, 3, 3)
         dlt_e, curv_e = _parabola(y[..., 0, 1], y[..., 1, 1], y[..., 2, 1])
         dlt_m, curv_m = _parabola(y[..., 1, 0], y[..., 1, 1], y[..., 1, 2])
         e_c = (e_c + dlt_e * shrink * de).clamp(lo_e, hi_e)
         m_c = torch.remainder(m_c + dlt_m * shrink * dm, TWO_PI)
         h_e, h_m = shrink * de, shrink * dm
-    d2e, d2m = curv_e / h_e**2, curv_m / h_m**2
+    return e_c, m_c, curv_e / h_e**2, curv_m / h_m**2
+
+
+@torch.no_grad()
+def _refine_frequency(batch, freq, ecc, m0, step, n_scan: int = 0):
+    """Keplerian Delta chi^2 at fixed (e, M0): optional scan of +-n_scan steps, then a parabola.
+
+    ``freq``, ``ecc``, ``m0``, ``step`` (cycles/day) have shape (B, K).
+    """
+    dev, f64 = freq.device, torch.float64
+    if n_scan:
+        j = torch.arange(-n_scan, n_scan + 1, dtype=f64, device=dev)
+        fs = (freq[..., None] + step[..., None] * j).clamp_min(1e-6)
+        y = _gain(batch, 1.0 / fs, ecc[..., None], m0[..., None])
+        freq = fs.gather(-1, y.argmax(-1, keepdim=True))[..., 0]
+    off = torch.tensor([-1.0, 0.0, 1.0], dtype=f64, device=dev)
+    fs = (freq[..., None] + step[..., None] * off).clamp_min(1e-6)
+    y = _gain(batch, 1.0 / fs, ecc[..., None], m0[..., None])
+    dlt, _ = _parabola(y[..., 0], y[..., 1], y[..., 2])
+    return freq + dlt * step
+
+
+@torch.no_grad()
+def profile_anchors(
+    batch: dict,
+    period_d: torch.Tensor,
+    ecc_max: float,
+    n_e: int = 8,
+    n_m: int = 16,
+    sigma_f: torch.Tensor | None = None,
+) -> dict:
+    """(e, M0) maps and anchors at each anchor period ``period_d`` (B, K).
+
+    If ``sigma_f`` (B, K), the circular-orbit Fisher width in frequency, is given, the period is
+    also re-refined with the exact Keplerian Delta chi^2 by coordinate ascent: (e, M0) at the
+    circular period, then the frequency at fixed (e, M0) (scan of +-24 sigma_f, then parabolas),
+    then (e, M0) again at the new period, then the frequency once more. This removes the shift of
+    the circular-periodogram peak for eccentric orbits (docs/derivations.md, section 5e).
+
+    Returns
+    -------
+    dict with ``map`` (B, K, n_e, n_m) log(1 + Delta chi^2) on the grid at the input period;
+    refined ``ecc``, ``m0`` and ``period`` (B, K); Fisher widths ``sigma_e``, ``sigma_m0``
+    (B, K) (inf where the profile is not curved, e.g. M0 for a near-circular orbit).
+    """
+    dev, f64 = batch["t_d"].device, torch.float64
+    b, k = period_d.shape
+    period = period_d.to(f64)
+    e_grid = (torch.arange(n_e, dtype=f64, device=dev) + 0.5) * ecc_max / n_e
+    m_grid = torch.arange(n_m, dtype=f64, device=dev) * TWO_PI / n_m
+    ee, mm = torch.meshgrid(e_grid, m_grid, indexing="ij")
+    gain = _gain(
+        batch, period[..., None].expand(b, k, n_e * n_m), ee.reshape(1, 1, -1), mm.reshape(1, 1, -1)
+    ).reshape(b, k, n_e, n_m)
+    best = gain.reshape(b, k, -1).argmax(-1)
+    e_c, m_c = e_grid[best // n_m], m_grid[best % n_m]
+    de, dm = ecc_max / n_e, TWO_PI / n_m
+    e_c, m_c, d2e, d2m = _refine_e_m0(batch, period, e_c, m_c, de, dm, (1.0, 0.25), ecc_max)
+    if sigma_f is not None:
+        sig = sigma_f.to(f64)
+        freq = _refine_frequency(batch, 1.0 / period, e_c, m_c, 2.0 * sig, n_scan=12)
+        freq = _refine_frequency(batch, freq, e_c, m_c, 0.5 * sig)
+        e_c, m_c, d2e, d2m = _refine_e_m0(
+            batch, 1.0 / freq, e_c, m_c, de, dm, (0.25, 0.0625), ecc_max
+        )
+        freq = _refine_frequency(batch, freq, e_c, m_c, 0.125 * sig)
+        period = 1.0 / freq
     inf = torch.full_like(d2e, torch.inf)
     sig_e = torch.where(d2e < 0, torch.sqrt(2.0 / (-d2e).clamp_min(1e-300)), inf)
     sig_m = torch.where(d2m < 0, torch.sqrt(2.0 / (-d2m).clamp_min(1e-300)), inf)
-    return {"map": torch.log1p(gain), "ecc": e_c, "m0": m_c, "sigma_e": sig_e, "sigma_m0": sig_m}
+    return {
+        "map": torch.log1p(gain),
+        "ecc": e_c,
+        "m0": m_c,
+        "period": period,
+        "sigma_e": sig_e,
+        "sigma_m0": sig_m,
+    }

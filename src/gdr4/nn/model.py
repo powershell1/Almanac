@@ -96,11 +96,13 @@ class PeriodogramEncoder(nn.Module):
         n_profile: int = 0,
         ecc_max: float = 0.9,
         profile_grid: tuple[int, int] = (8, 16),
+        refine_period: bool = False,
     ):
         super().__init__()
         self.period_range_d = tuple(period_range_d)
         self.n_peaks = n_peaks
         self.n_profile, self.ecc_max, self.profile_grid = n_profile, ecc_max, tuple(profile_grid)
+        self.refine_period = refine_period
         self.out_dim = out_dim * (1 + bool(n_peaks) + bool(n_profile))
         self.register_buffer("freqs", frequency_grid(*period_range_d, k), persistent=False)
         self.cnn = nn.Sequential(
@@ -152,7 +154,16 @@ class PeriodogramEncoder(nn.Module):
             parts = [emb, self.peaks(pk.flatten(1))]
             if self.n_profile:
                 period = 1.0 / peaks["freq"][:, : self.n_profile]
-                prof = profile_anchors(batch, period, self.ecc_max, *self.profile_grid)
+                sigma_f = None
+                if self.refine_period:
+                    d2 = peaks["d2"][:, : self.n_profile]
+                    step = (self.freqs[1] - self.freqs[0]).to(d2)
+                    sigma_f = torch.where(
+                        d2 < 0, torch.sqrt(2.0 / (-d2).clamp_min(1e-300)), step
+                    ).clamp(max=step)
+                prof = profile_anchors(
+                    batch, period, self.ecc_max, *self.profile_grid, sigma_f=sigma_f
+                )
                 peaks["profile"] = prof
                 parts.append(self._embed_maps(prof["map"].float()))
             return torch.cat(parts, dim=-1), peaks
@@ -172,6 +183,7 @@ class TransitEncoder(nn.Module):
         pgram_peaks: int = 0,
         n_profile: int = 0,
         ecc_max: float = 0.9,
+        refine_period: bool = False,
     ):
         super().__init__()
         self.variant = variant
@@ -183,6 +195,7 @@ class TransitEncoder(nn.Module):
                 n_peaks=pgram_peaks,
                 n_profile=n_profile,
                 ecc_max=ecc_max,
+                refine_period=refine_period,
             )
             if pgram_k
             else None
@@ -467,6 +480,7 @@ class NPE(nn.Module):
         target_period_d: tuple[float, float] = (30.0, 2000.0),
         profile: bool = False,
         target_ecc_max: float = 0.9,
+        refine_period: bool = False,
     ):
         super().__init__()
         if pgram_peaks and not pgram_k:
@@ -477,6 +491,9 @@ class NPE(nn.Module):
             raise ValueError("head='anchored' needs pgram_peaks >= n_anchor")
         if profile and head != "anchored":
             raise ValueError("profile=True needs head='anchored'")
+        if refine_period and not profile:
+            raise ValueError("refine_period=True needs profile=True")
+        self.refine_period = refine_period
         self.head = head
         self.n_anchor = n_anchor
         self.target_period_d = tuple(target_period_d)
@@ -501,6 +518,7 @@ class NPE(nn.Module):
             target_period_d=list(target_period_d),
             profile=profile,
             target_ecc_max=float(target_ecc_max),
+            refine_period=refine_period,
         )
         self.encoder = TransitEncoder(
             features,
@@ -514,6 +532,7 @@ class NPE(nn.Module):
             pgram_peaks,
             n_anchor if profile else 0,
             float(target_ecc_max),
+            refine_period,
         )
         if head == "nsf":  # joint 2-D spline flow over (u_P, u_e)
             self.flow = zuko.flows.NSF(
@@ -554,7 +573,10 @@ class NPE(nn.Module):
             ctx, peaks = self.encoder(batch)
         anchors = None
         if self.head == "anchored":
-            anchors = anchors_from_peaks(peaks, self.n_anchor, self.target_period_d)
+            freq = None
+            if self.refine_period:  # Keplerian re-refined anchor positions (docs, section 5e)
+                freq = 1.0 / peaks["profile"]["period"]
+            anchors = anchors_from_peaks(peaks, self.n_anchor, self.target_period_d, freq)
             if self.profile:
                 anchors.update(
                     profile_to_anchors(peaks["profile"], anchors["valid"], self.target_ecc_max)
