@@ -215,3 +215,27 @@ rescaling the reported sigma.
   kappa = 1 exactly, so slightly pessimistic; they should marginalise kappa).
 - Outliers are handled only through an overall noise inflation, not an outlier model.
 - OPEN: the kappa range (0.8–1.5) is a placeholder to justify; references need a kappa dimension.
+
+## 2026-10-28 (later): noise scale added to the reference sampler
+
+Code `ded0b3c`. With `noise_scale_range` (read from the training noise model, so simulator and
+reference share one prior) the reference adds log kappa ~ U(log 0.8, log 1.5) and uses kappa
+sigma in the analytic likelihood. Simulated data now record each star's true `noise_scale`
+(random draws unchanged; the regenerated smoke test sets are bit-identical otherwise). Tests:
+kappa recovered to < 15% with the truth inside the 99% interval; refined vs plain sampling
+agree in all 5 coordinates; 5-D kernel density normalised.
+
+Local check (noise-rescaled model from 2026-10-28, 1385 steps; 20 reference stars per set,
+lowest ESS 2433; **not counted**):
+
+| C2ST ≤ 0.65 | vs kappa = 1 references | vs kappa-marginalised references |
+|---|---|---|
+| nominal test set     | 15/20 | 15/20 (median 0.60) |
+| scale_prior test set | –     | 11/20 (median 0.62) |
+
+- Reference self-calibration incl. log kappa within the noise of 20 stars
+  (log kappa coverage 0.55–0.60 / 0.65–0.70 / 0.85–0.95).
+- On scale_prior, new failures at S/N 1.8–4.9 with kappa 1.12–1.33 (C2ST 0.68–0.89); S/N is
+  quoted against the reported sigma, so these are effectively fainter. High-S/N stars fail on
+  both sets, as before. Cannot separate under-training (1385 steps) from a real weakness here.
+- If scale_prior becomes the gating set (OPEN), C2ST currently fails it locally.
