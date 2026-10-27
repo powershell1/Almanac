@@ -25,7 +25,8 @@ Amortized neural posterior estimation (NPE) of companion orbits from **Gaia DR4 
 - Kaggle steps: `docs/kaggle_runbook.md`. Not run yet. gaiamock scan files not downloaded yet.
 - **No counted runs and no research results exist yet.** Nothing belongs in `results/` unless a script in this repo generated it.
 - Local env: `source .env/miniforge3/bin/activate .env/gdr4` (Miniforge, Python 3.11).
-- Drafted design choices awaiting approval: zuko spline flow + von Mises mixture for the phase; amplitude hyperparameter `s_a` (derivations §4); S/N and alias-failure definitions in `configs/killtest.yaml`.
+- Drafted design choices awaiting approval: zuko spline flow + von Mises mixture for the phase; amplitude hyperparameter `s_a` (derivations §4); S/N and alias-failure definitions in `configs/killtest.yaml`; periodogram input + peak features, peak-anchored period head, (e, M0) profile with anchored phase, Keplerian anchor refinement (derivations §5b–5e; all switchable in `configs/killtest.yaml` for ablations).
+- Known issues from local checks (research log 2026-10-27): coverage under a 20% sigma misspecification is 10 pp off; single-star CPU inference is 95 ms (gate 50 ms; GPU untested).
 
 ---
 

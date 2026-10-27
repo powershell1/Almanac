@@ -128,3 +128,32 @@ Local 1.5 h runs, same config/seed/data (toy scan law, CPU; **not counted**), ev
   on the Kaggle GPU, where the gate applies.
 - Next options: Keplerian re-refinement of the period anchor at (e*, M0*); longer training
   (this run had half the steps and its loss was still falling).
+
+## 2026-10-27 (later): Keplerian re-refinement of the period anchor
+
+Same local setup (toy scan law, CPU, 1.5 h, same seed/data; **not counted**). Code `b771d9a`,
+docs §5e, check `scripts/diagnostics/check_period_anchor.py`.
+
+| | profile (prev) | + Keplerian anchor refinement |
+|---|---|---|
+| steps in 1.5 h                          | 1597  | 1387  |
+| best val loss                           | −1.55 | −2.11 |
+| C2ST ≤ 0.65 (of 20)                     | 13    | 15 (gate: ≥ 14) |
+| coverage error, nominal                 | 2.3 pp | 4.0 pp |
+| period recovered / wrong-period, S/N > 6 | 98.6% / 2.1% | 100% / 0.0% |
+| coverage error, sigma 20% too small     | 13.3 pp | 10.0 pp |
+| ms/star CPU single / batched            | 71.5 / 17.4 | 94.8 / 24.5 |
+
+- Anchor offsets from the exact centre: worst stars 19.0 / 6.0 / 5.5 → 1.8 / 0.8 / 0.5 widths.
+- C2ST by S/N: 11–23 now 0.61–0.65; 27–98 now 0.74–0.84 (period dimension fine; the phase is
+  still 9–22× too wide there). C2ST on a few hundred samples is noisy (±0.03 between runs),
+  so 15/20 should be read as roughly 14–16.
+- **Misspecification:** with true noise 20% above the reported sigma, coverage error is 10 pp
+  for the sharp heads vs 2.3 pp for the old, blurry head. Expected: a correct sharp posterior
+  becomes over-confident when sigma is wrong; the blurry head was robust by accident. Directly
+  relevant to claimed contribution 3; needs its own design (e.g. a noise-scale nuisance
+  parameter in training). The Phase 1 gate only uses nominal noise.
+- **Timing:** single-star CPU inference is 95 ms (> 50 ms), 60 ms of it in the (e, M0) profile
+  and period refinement (many small float64 ops). Batched: 24.5 ms/star. Must be measured on the
+  Kaggle GPU. OPEN: decide whether the 50 ms gate means single-star latency or batched
+  throughput, before the counted run.
