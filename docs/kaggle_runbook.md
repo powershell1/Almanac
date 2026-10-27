@@ -17,10 +17,24 @@ Adjust the `/kaggle/input/...` paths at the top of each notebook to your own slu
 3. Confirm the open decisions in `configs/killtest.yaml` (priors, S/N and alias definitions)
    and the target ISEF year. Write the Research Plan **before** step 4 below (ISEF rules).
 
-## 1. `01_env_check` (GPU, ~5 min)
+## 1. `01_env_check` (GPU, ~10 min) — and the go/no-go on compute
 
-Prints Python/GPU/package versions to `env_report.json` and runs the fast tests.
+Prints Python/GPU/package versions to `env_report.json`, runs the fast tests, then
+`scripts/benchmark.py`: the time of one training step and of posterior sampling on the T4.
 Copy the versions into `pyproject.toml` and commit.
+
+**Read the benchmark before any counted run.** The physics inputs (periodogram, (e, M0)
+profile, Keplerian refinement, noise estimate) are float64 and are recomputed every step; on
+this laptop's CPU they take ~25 of the 36 s per batch-512 step, and T4 float64 is slow.
+
+| projected steps per 11 h session | what to do |
+|---|---|
+| ≥ ~150k                | run as configured |
+| ~20k – 150k            | lower `training.max_steps` to what fits in ≤ 12 GPU-hours; or `batch_size` 256 |
+| < ~20k                 | not viable as is: precompute the physics features once per star in the CPU simulation sessions (code change), or switch off the costliest part (`model.profile: false`) and accept a worse C2ST |
+
+Also note the sampling time it prints against the 50 ms gate (single star vs batched: OPEN which
+one the gate means).
 
 ## 2. `02_scan_cache_cpu` (CPU, ~10–20 min)
 
@@ -28,15 +42,18 @@ Reads the 49,152 FITS files once and writes `data_cache/scan_cache_dr4_gaiamock.
 
 ## 3. `03_simulate_cpu` (CPU)
 
-Writes the frozen test set (`shards/test/<noise>/`, 2,000 stars × 6 noise models) and
-2,000,000 training stars (`shards/train/`, 40 shards, ~4.5 GB). Locally the simulator runs
+Writes the frozen test set (`shards/test/<noise>/`, 2,000 stars × 7 noise models, including
+`scale_prior`) and 2,000,000 training stars (`shards/train/`, 40 shards, ~4.5 GB) with the
+unknown per-star noise scale (`simulation.noise_model: scale_prior`). Locally the simulator runs
 at ~12k stars/s on one core, so expect well under an hour. Resumable.
 **This is the first counted data collection: record the date in `logs/research_log.md`.**
 
 ## 4. `04_reference_cpu` (CPU, ~4 h for 200 stars)
 
-Brute-force reference posteriors (prior sampling + defensive importance sampling).
+Brute-force reference posteriors (prior sampling + defensive importance sampling), with the
+noise scale marginalised automatically when the training noise model has one (5 parameters).
 Each star writes `shards/reference/star_XXXXX.npz` with its ESS; rerunning skips done stars.
+The test set used is `evaluation.reference_noise_model` (default `nominal`).
 
 ## 5. `05_train_gpu` (2× T4, ≤ 11 h per session)
 

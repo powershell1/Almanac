@@ -11,7 +11,10 @@ from pathlib import Path
 HERE = Path(__file__).parent
 
 SETUP = r"""# --- Setup: get the code (no project logic in notebooks; everything lives in src/ and scripts/) ---
-import os, subprocess, sys
+import os
+import subprocess
+import sys
+
 REPO_URL = "https://github.com/powershell1/Almanac.git"
 BRANCH = "master"
 SRC = "/tmp/Almanac"
@@ -44,6 +47,13 @@ NOTEBOOKS = {
         ("code", SETUP),
         ("code", "!python scripts/env_check.py --out /kaggle/working/env_report.json"),
         ("code", "!python -m pytest -q -m 'not slow' tests"),
+        (
+            "md",
+            "Time one training step and posterior sampling on this GPU. If the projected "
+            "steps per session are far below `training.max_steps`, adjust the plan before "
+            "the counted run (fewer steps, smaller batch, or precomputed physics features).",
+        ),
+        ("code", "!python scripts/benchmark.py --config {CFG}"),
     ],
     "02_scan_cache_cpu.ipynb": [
         (
